@@ -2,16 +2,22 @@
  * ============================================================================
  * dsh-task-guard-badge · Host 半边
  * ============================================================================
- * 浏览器里的徽章读不到 Host 进程内存，所以这里只做一件事：
- * 注册一个只读 HTTP 接口，把 dsh-task-guard 写在磁盘上的 current.json 吐出去。
+ * 浏览器里的徽章读不到 Host 进程内存，所以这里把「磁盘上已有的状态」整理成
+ * 一个给 UI 用的 JSON，并提供一条 SSE 推送通道。
  *
- *   GET /task-guard/state  ->  { active, taskId, groups, denyCount, ... }
+ *   GET /task-guard/state   一次性的完整状态（JSON）
+ *   GET /task-guard/stream  Server-Sent Events，每 2 秒推一次（掉线由浏览器自动重连）
  *
- * 数据源：~/.dsh/task-guard/current.json（由 dsh-task-guard 在任务开始/结束时写）
- * 读不到就返回 { active: false }，绝不报错——徽章是锦上添花，不能影响主流程。
+ * 数据来源（全部只读，不写任何东西）：
+ *   ~/.dsh/task-guard/current.json          任务收窄的快照（task-guard 写）
+ *   ~/.dsh/minimal-router/activity.jsonl    事件流（切阶段/改工具表/拦截）
+ *   ~/.dsh/minimal-router/usage.jsonl       探针账单（含每条请求的阶段与工具数）
+ *
+ * 设计原则：任何一块读不到都只是"少一块数据"，绝不抛错——徽章不能影响主流程。
  * ============================================================================
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { openSync, readSync, closeSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { toolOwners } from './lib/owners.js'
@@ -20,58 +26,194 @@ export const name = 'task-guard-badge'
 /** 需要 HTTP 载体服务（没有它这个插件不成立） */
 export const inject = ['webServer']
 
-/** 和 dsh-task-guard 共用同一个状态目录 */
-const STATE_FILE = join(homedir(), '.dsh', 'task-guard', 'current.json')
-/** 扫描工具归属时用的 profile 目录（可用 DSH_PROFILE 覆盖） */
+const STATE_DIR = join(homedir(), '.dsh', 'task-guard')
+const ROUTER_DIR = join(homedir(), '.dsh', 'minimal-router')
+const STATE_FILE = join(STATE_DIR, 'current.json')
+const ACTIVITY_FILE = join(ROUTER_DIR, 'activity.jsonl')
+const PROBE_FILE = join(ROUTER_DIR, 'usage.jsonl')
 const PROFILE_DIR = join(homedir(), '.dsh', 'profiles', process.env.DSH_PROFILE || 'desktop')
 
-/**
- * @param {import('@deepseek-ai/cordis').Context} ctx
- * @param {{pollMs?: number, routePath?: string}} config
- */
+/** 读文件尾部若干字节（日志可能几 MB，整读太浪费） */
+function readTail(file, maxBytes = 96 * 1024) {
+  try {
+    if (!existsSync(file)) return ''
+    const size = statSync(file).size
+    const start = Math.max(0, size - maxBytes)
+    const length = size - start
+    if (length <= 0) return ''
+    const fd = openSync(file, 'r')
+    try {
+      const buffer = Buffer.alloc(length)
+      readSync(fd, buffer, 0, length, start)
+      let text = buffer.toString('utf8')
+      // 从中间截断可能产生半个 UTF-8 字符 → 丢掉第一行（可能不完整）
+      if (start > 0) {
+        const nl = text.indexOf('\n')
+        text = nl >= 0 ? text.slice(nl + 1) : ''
+      }
+      return text
+    } finally {
+      closeSync(fd)
+    }
+  } catch {
+    return ''
+  }
+}
+
+/** 把 JSONL 文本解析成数组（坏行跳过） */
+function parseLines(text) {
+  const out = []
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    try {
+      const value = JSON.parse(line)
+      if (value && typeof value === 'object') out.push(value)
+    } catch {
+      // 坏行跳过
+    }
+  }
+  return out
+}
+
+/** 最近的事件（新的在前），只保留 UI 用得上的字段 */
+function recentEvents(limit = 20) {
+  const rows = parseLines(readTail(ACTIVITY_FILE))
+  const keep = rows.slice(-limit * 2).filter((row) => row && typeof row.kind === 'string')
+  return keep
+    .slice(-limit)
+    .reverse()
+    .map((row) => ({
+      t: Number(row.t) || 0,
+      kind: row.kind,
+      from: typeof row.from === 'string' ? row.from : '',
+      to: typeof row.to === 'string' ? row.to : '',
+      stage: typeof row.stage === 'string' ? row.stage : '',
+      tool: typeof row.tool === 'string' ? row.tool : '',
+      by: typeof row.by === 'string' ? row.by : '',
+      deny: Number(row.deny) || 0,
+      kw: typeof row.kw === 'string' ? row.kw : '',
+    }))
+}
+
+/** 探针：最近几条 + 最后一条的 stage（这就是"现在处于哪个阶段"的近似值） */
+function probeInfo(limit = 8) {
+  let rows = parseLines(readTail(PROBE_FILE))
+  if (rows.length === 0) rows = parseLines(readTail(`${PROBE_FILE}.1`))
+  const recent = rows.slice(-limit).map((row) => ({
+    at: Number(row.at) || 0,
+    tools: Number(row.tools) || 0,
+    toolsChars: Number(row.toolsChars) || 0,
+    stage: typeof row.stage === 'string' ? row.stage : '',
+    promptTokens: Number(row.promptTokens) || 0,
+    hitRate: Number(row.hitRate) || 0,
+  }))
+  const last = rows.length > 0 ? rows[rows.length - 1] : null
+  return {
+    stage: last && typeof last.stage === 'string' ? last.stage : '',
+    tools: last ? Number(last.tools) || 0 : 0,
+    toolsChars: last ? Number(last.toolsChars) || 0 : 0,
+    promptTokens: last ? Number(last.promptTokens) || 0 : 0,
+    hitRate: last ? Number(last.hitRate) || 0 : 0,
+    recent,
+  }
+}
+
+/** 组装一次完整状态（所有异常都被吞掉） */
+function buildState() {
+  let state = { active: false }
+  try {
+    if (existsSync(STATE_FILE)) state = JSON.parse(readFileSync(STATE_FILE, 'utf8'))
+  } catch {
+    /* 坏文件当没任务 */
+  }
+
+  // 工具 → 插件归属
+  try {
+    const denied = Array.isArray(state.deniedTools) ? state.deniedTools : []
+    const kept = Array.isArray(state.keptTools) ? state.keptTools : []
+    if (denied.length + kept.length > 0) {
+      const owners = toolOwners(PROFILE_DIR, [...denied, ...kept])
+      const ownerOf = {}
+      const buckets = new Map()
+      for (const tool of denied) {
+        const info = owners.byTool[tool]
+        const title = info ? info.title : ''
+        ownerOf[tool] = title
+        const key = title || '(未归属)'
+        buckets.set(key, (buckets.get(key) || 0) + 1)
+      }
+      state.toolOwners = ownerOf
+      state.deniedByOwner = [...buckets.entries()]
+        .map(([title, count]) => ({ title, count }))
+        .sort((a, b) => b.count - a.count)
+    }
+  } catch {
+    // 归属失败不影响其它字段
+  }
+
+  // 路由器的实时信息
+  try {
+    const probe = probeInfo()
+    state.stage = probe.stage || ''
+    state.probe = { tools: probe.tools, toolsChars: probe.toolsChars, promptTokens: probe.promptTokens, hitRate: probe.hitRate, recent: probe.recent }
+  } catch {
+    // 探针读不到就算了
+  }
+  try {
+    state.history = recentEvents(20)
+  } catch {
+    state.history = []
+  }
+  state.serverTime = Date.now()
+  return state
+}
+
 export function apply(ctx, config = {}) {
   const routePath = typeof config.routePath === 'string' && config.routePath.startsWith('/') ? config.routePath : '/task-guard/state'
+  const streamPath = routePath.endsWith('/state') ? `${routePath.slice(0, -'/state'.length)}/stream` : `${routePath}/stream`
+  const pushMs = Number.isFinite(config.pushMs) ? Math.max(1000, Math.trunc(config.pushMs)) : 2000
 
   ctx.effect(() =>
     ctx.webServer.register({
       kind: 'exact',
       path: routePath,
       handler(_request, response) {
-        let state = { active: false }
-        try {
-          if (existsSync(STATE_FILE)) state = JSON.parse(readFileSync(STATE_FILE, 'utf8'))
-        } catch {
-          /* 文件坏了就当没任务，不把异常甩给浏览器 */
-        }
-        // 【v0.3.0】给每个工具补上"它属于哪个插件"——用户真正想看的是这个
-        try {
-          const denied = Array.isArray(state.deniedTools) ? state.deniedTools : []
-          const kept = Array.isArray(state.keptTools) ? state.keptTools : []
-          if (denied.length + kept.length > 0) {
-            const owners = toolOwners(PROFILE_DIR, [...denied, ...kept])
-            const ownerOf = {}
-            const buckets = new Map()
-            for (const tool of denied) {
-              const info = owners.byTool[tool]
-              const title = info ? info.title : ''
-              ownerOf[tool] = title
-              const key = title || '(未归属)'
-              buckets.set(key, (buckets.get(key) || 0) + 1)
-            }
-            state.toolOwners = ownerOf
-            state.deniedByOwner = [...buckets.entries()]
-              .map(([title, count]) => ({ title, count }))
-              .sort((a, b) => b.count - a.count)
-          }
-        } catch {
-          // 归属只是锦上添花，失败不影响徽章
-        }
-        const body = JSON.stringify(state)
         response.writeHead(200, {
           'content-type': 'application/json; charset=utf-8',
           'cache-control': 'no-store',
         })
-        response.end(body)
+        response.end(JSON.stringify(buildState()))
+      },
+    }),
+  )
+
+  // SSE：浏览器用 EventSource 连，掉线会自动重连；断开时清掉定时器
+  ctx.effect(() =>
+    ctx.webServer.register({
+      kind: 'exact',
+      path: streamPath,
+      handler(request, response) {
+        response.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-store',
+          connection: 'keep-alive',
+        })
+        const send = () => {
+          try {
+            response.write(`data: ${JSON.stringify(buildState())}\n\n`)
+          } catch {
+            // 写失败（对端已断开）→ 交给 close 清理
+          }
+        }
+        send()
+        const timer = setInterval(send, pushMs)
+        const stop = () => {
+          clearInterval(timer)
+        }
+        request.on('close', stop)
+        response.on('close', stop)
+        // 防止 Node 因为长连接被当作挂死
+        if (typeof response.setTimeout === 'function') response.setTimeout(0)
       },
     }),
   )

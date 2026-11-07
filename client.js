@@ -2,27 +2,19 @@
  * ============================================================================
  * dsh-task-guard-badge · Client 半边（浏览器里跑）
  * ============================================================================
- * 挂在 conversation.composer.dock —— 「活动 / 用量」那一行下面。
+ * 形态：底部一枚胶囊 → 点开是一张卡片（三个 tab：概览 / 工具 / 历史）
  *
- * 【形态】
- *   收起：一枚紧凑胶囊 —— ● 任务收窄 · core+plugin   −218 工具   省 47K/轮
- *   点开：一张浮层卡片
- *     ┌──────────────────────────────┐
- *     │ 任务收窄            [收窄中] ✕ │
- *     │ 目标：只留 core + plugin       │
- *     │ ┌────────┬────────┐           │
- *     │ │ 摘掉    │ 保留    │           │
- *     │ │ 218    │ 20     │           │
- *     │ └────────┴────────┘           │
- *     │ 收窄强度 ███████████████░ 92%  │
- *     │ 每轮省 46,680 token ≈ 8 轮回本 │
- *     │ 组： core  plugin              │
- *     └──────────────────────────────┘
+ * 这一版解决的问题（对照 v0.4.0 的审计结论）：
+ *   · 主题适配：不再写死颜色，改用 color-mix(currentColor) + 系统色，深浅主题都跟手
+ *   · 响应式：宽度 min(360px, 100vw - 32px)，窄屏不溢出
+ *   · 找得到东西：工具页有搜索框，按插件折叠成树
+ *   · 有层次：环形进度 + 大数字 + 迷你柱状图 + 事件流
+ *   · 少延迟：优先用 SSE 推送，断了自动退回轮询
  *
- * 【三条纪律】
- *   1. 工厂函数本身不做副作用（只在 render 里读 state）
- *   2. 定时器/监听器必须在 unmount 时清掉，否则切会话会累积
- *   3. 颜色只用 currentColor + 中性 rgba，才能同时适配深/浅色主题
+ * 纪律：
+ *   1. 工厂函数不做副作用，只在 render / effect 里干活
+ *   2. 定时器、EventSource 必须在 unmount 时清掉
+ *   3. 所有颜色都从 currentColor 派生，不假设浅色或深色
  * ============================================================================
  */
 window.__ModuleLoader__.load({
@@ -31,64 +23,107 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
 
-    const POLL_MS = 4000
     const ENDPOINT = '/task-guard/state'
+    const STREAM = '/task-guard/stream'
+    const POLL_MS = 4000
 
-    /** 文案（跟随界面语言；取不到就中文） */
+    // ---------------------------------------------------------------------
+    // 文案
+    // ---------------------------------------------------------------------
     const COPY = {
       zh: {
-        active: '任务收窄',
-        inactive: '任务收窄 · 未开启',
-        allOpen: '工具表：全开',
-        inactiveTitle: '当前没有收窄任务；工具表是完整的',
-        colon: '：',
-        what: '只保留任务需要的工具，其余从工具表里摘掉——省的是每轮都要付的声明开销。',
+        title: '任务收窄',
         running: '收窄中',
-        goal: '目标',
-        removed: '摘掉工具',
-        kept: '保留工具',
+        off: '未开启',
+        fullTable: '工具表：全开',
+        what: '只保留任务需要的工具，其余从工具表里摘掉——省的是每轮都要付的声明开销。',
+        tabOverview: '概览',
+        tabTools: '工具',
+        tabHistory: '历史',
+        removed: '摘掉',
+        kept: '保留',
         strength: '收窄强度',
         saving: '每轮省',
         payback: '回本',
-        paybackUnit: '轮',
+        turns: '轮',
         token: 'token',
+        stage: '当前阶段',
+        noStage: '还没记录到阶段',
+        toolsNow: '工具表大小',
         groups: '保留范围',
+        goal: '目标',
+        search: '搜索工具名或插件…',
+        allOwners: '全部',
         keptTools: '保留的工具',
-        deniedTools: '砍掉的工具',
-        all: '全部',
-        none: '（没有名单：这份快照是旧版本写的）',
+        removedTools: '砍掉的工具',
         empty: '（没有）',
-        unknownOwner: '未识别来源',
-        hint: '想恢复全部工具：说「结束任务」或调用 task_end',
-        stale: '这个状态可能已过期（{age}前写入），任务可能已经不在运行',
+        noMatch: '没有匹配的工具',
+        expand: '展开',
+        collapse: '收起',
+        historyEmpty: '还没有事件记录',
+        refresh: '刷新',
         close: '关闭',
+        hintEnd: '想恢复全部工具：说「结束任务」或调用 task_end',
+        stale: '这个状态可能已过期（{age} 前写入）',
+        unknownOwner: '未识别来源',
+        eventSwitch: '切阶段',
+        eventBlock: '闸门拦截',
+        eventDeny: '调用被拦',
+        eventRestrict: '改工具表',
+        eventGrant: '临时放开',
+        eventReset: '复位',
+        eventDegrade: '降级',
+        justNow: '刚刚',
+        minutesAgo: '{n} 分钟前',
+        hoursAgo: '{n} 小时前',
+        daysAgo: '{n} 天前',
       },
       en: {
-        active: 'Task narrowing',
-        inactive: 'Task narrowing · off',
-        allOpen: 'Tools: full table',
-        inactiveTitle: 'No narrowing task is running; the tool table is complete',
-        colon: ': ',
-        what: 'Only the tools this task needs stay available; the rest leave the tool table, saving the per-turn declaration cost.',
+        title: 'Task narrowing',
         running: 'active',
-        goal: 'Goal',
-        removed: 'Tools removed',
-        kept: 'Tools kept',
+        off: 'off',
+        fullTable: 'Tools: full table',
+        what: 'Only the tools this task needs stay available; the rest leave the tool table, saving the per-turn declaration cost.',
+        tabOverview: 'Overview',
+        tabTools: 'Tools',
+        tabHistory: 'History',
+        removed: 'Removed',
+        kept: 'Kept',
         strength: 'Narrowing',
         saving: 'Saved / turn',
         payback: 'Payback',
-        paybackUnit: 'turns',
+        turns: 'turns',
         token: 'token',
+        stage: 'Stage',
+        noStage: 'no stage recorded yet',
+        toolsNow: 'Tool table',
         groups: 'Scope',
+        goal: 'Goal',
+        search: 'Search a tool or plugin…',
+        allOwners: 'All',
         keptTools: 'Kept tools',
-        deniedTools: 'Removed tools',
-        all: 'All',
-        none: '(no lists in this snapshot — written by an older version)',
+        removedTools: 'Removed tools',
         empty: '(none)',
-        unknownOwner: 'Unknown source',
-        hint: 'To restore every tool: say "end the task" or call task_end',
-        stale: 'This state may be stale (written {age} ago); the task is probably not running',
+        noMatch: 'No matching tool',
+        expand: 'Expand',
+        collapse: 'Collapse',
+        historyEmpty: 'No events yet',
+        refresh: 'Refresh',
         close: 'Close',
+        hintEnd: 'To restore every tool: say "end the task" or call task_end',
+        stale: 'This state may be stale (written {age} ago)',
+        unknownOwner: 'Unknown source',
+        eventSwitch: 'stage switch',
+        eventBlock: 'gate blocked',
+        eventDeny: 'call denied',
+        eventRestrict: 'tool table',
+        eventGrant: 'granted',
+        eventReset: 'reset',
+        eventDegrade: 'degraded',
+        justNow: 'just now',
+        minutesAgo: '{n}m ago',
+        hoursAgo: '{n}h ago',
+        daysAgo: '{n}d ago',
       },
     }
 
@@ -103,20 +138,58 @@ window.__ModuleLoader__.load({
     }
     const T = pickCopy()
 
-    /** 12345 → 12K；0.5 → 0.5 */
+    // ---------------------------------------------------------------------
+    // 颜色：全部从 currentColor 派生，深浅主题都跟手
+    // ---------------------------------------------------------------------
+    const SUPPORTS_MIX = (() => {
+      try {
+        return typeof CSS !== 'undefined' && CSS.supports && CSS.supports('color', 'color-mix(in srgb, red 10%, transparent)')
+      } catch {
+        return false
+      }
+    })()
+    /** 用当前文字色的 p% 做一层底色/边框（不支持 color-mix 就退回中性灰） */
+    const tint = (pct) => (SUPPORTS_MIX ? `color-mix(in srgb, currentColor ${pct}%, transparent)` : `rgba(127,127,127,${pct / 100})`)
+    const ACCENT = '#22c55e'
+    const ACCENT_SOFT = SUPPORTS_MIX ? 'color-mix(in srgb, #22c55e 18%, transparent)' : 'rgba(34,197,94,0.18)'
+    const WARN = '#d97706'
+    const MUTED = SUPPORTS_MIX ? 'color-mix(in srgb, currentColor 55%, transparent)' : 'rgba(127,127,127,0.75)'
+
+    // ---------------------------------------------------------------------
+    // 格式化
+    // ---------------------------------------------------------------------
     function fmt(n) {
       const v = Number(n) || 0
-      if (v >= 1000000) return `${Math.round(v / 100000) / 10}M`
+      if (v >= 1e6) return `${Math.round(v / 1e5) / 10}M`
       if (v >= 1000) return `${Math.round(v / 100) / 10}K`
       return String(v)
     }
-
-    /**
-     * 工具名 → 组名（和 host 侧 dsh-task-guard 的 tagOf 口径一致）。
-     *   unity_object_create → unity
-     *   task_start          → task
-     *   mcp__meshy__x       → meshy
-     */
+    function ageText(at) {
+      const ms = Date.now() - (Number(at) || 0)
+      if (!Number.isFinite(ms) || ms < 0) return ''
+      const min = Math.round(ms / 60000)
+      if (min < 1) return T.justNow
+      if (min < 60) return T.minutesAgo.replace('{n}', String(min))
+      const hours = Math.round(min / 60)
+      if (hours < 48) return T.hoursAgo.replace('{n}', String(hours))
+      return T.daysAgo.replace('{n}', String(Math.round(hours / 24)))
+    }
+    function clockOf(t) {
+      try {
+        const d = new Date(Number(t) || 0)
+        return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
+      } catch {
+        return ''
+      }
+    }
+    function staleAge(state) {
+      const at = Number(state && (state.at || state.startedAt)) || 0
+      if (!at) return ''
+      const ms = Date.now() - at
+      if (ms < 12 * 3600 * 1000) return ''
+      const hours = Math.round(ms / 3600000)
+      return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`
+    }
     function tagOfName(name) {
       if (typeof name !== 'string' || !name) return 'unknown'
       if (name.startsWith('mcp__')) {
@@ -126,88 +199,14 @@ window.__ModuleLoader__.load({
       const cut = name.indexOf('_')
       return cut <= 0 ? 'core' : name.slice(0, cut)
     }
-
-    /**
-     * 组名 → 人话。
-     *
-     * 【为什么要这张表】`core` / `plugin` 是代码里的标签，直接给用户看像半成品。
-     * 发给别人用时，徽章上不应该出现内部标识符。表里没有的组直接显示原名（不会报错）。
-     */
-    const GROUP_LABELS = {
-      core: { zh: '基础工具', en: 'Core' },
-      plugin: { zh: '插件管理', en: 'Plugins' },
-      route: { zh: '路由控制', en: 'Router' },
-      guard: { zh: '熔断器', en: 'Guard' },
-      cache: { zh: '缓存探针', en: 'Probe' },
-      task: { zh: '任务管理', en: 'Tasks' },
-      unity: { zh: 'Unity', en: 'Unity' },
-      ui: { zh: '界面', en: 'UI' },
-      uikit: { zh: 'UI 组件', en: 'UIKit' },
-      uiflow: { zh: 'UI 流程', en: 'UIFlow' },
-      art: { zh: '美术', en: 'Art' },
-      meshy: { zh: '3D 模型', en: '3D' },
-      image: { zh: '图片', en: 'Images' },
-      audio: { zh: '音频', en: 'Audio' },
-      ego: { zh: '浏览器', en: 'Browser' },
-      github: { zh: 'GitHub', en: 'GitHub' },
-      terminal: { zh: '终端', en: 'Terminal' },
-      python: { zh: 'Python', en: 'Python' },
-      notebook: { zh: '笔记本', en: 'Notebook' },
-      office: { zh: 'Office 文档', en: 'Office' },
-      docx: { zh: 'Word', en: 'Word' },
-      pptx: { zh: 'PPT', en: 'Slides' },
-      markdown: { zh: 'Markdown', en: 'Markdown' },
-      read: { zh: '文档读取', en: 'Docs' },
-      screen: { zh: '桌面操作', en: 'Desktop' },
-      click: { zh: '桌面操作', en: 'Desktop' },
-      sticker: { zh: '表情包', en: 'Stickers' },
-      meme: { zh: '表情包', en: 'Memes' },
-      comfyui: { zh: 'ComfyUI', en: 'ComfyUI' },
-      modlens: { zh: '视觉', en: 'Vision' },
-      adapt: { zh: '自适应记忆', en: 'Adaptive' },
-      session: { zh: '会话', en: 'Sessions' },
-      study: { zh: '学习', en: 'Study' },
-      list: { zh: '列表', en: 'Lists' },
-      search: { zh: '搜索', en: 'Search' },
-      transcribe: { zh: '转写', en: 'Transcribe' },
-      // Unity 全家（这些组名直接来自插件名前缀）
-      level: { zh: '关卡', en: 'Level' },
-      perf: { zh: '性能', en: 'Perf' },
-      save: { zh: '存档', en: 'Save' },
-      lighting: { zh: '光照', en: 'Lighting' },
-      player: { zh: '玩家', en: 'Player' },
-      enemy: { zh: '敌人', en: 'Enemy' },
-      l10n: { zh: '本地化', en: 'Localization' },
-      gameplay: { zh: '玩法', en: 'Gameplay' },
-      dialogue: { zh: '对话', en: 'Dialogue' },
-      quest: { zh: '剧情任务', en: 'Quest' },
-      asset: { zh: '资源', en: 'Assets' },
-      // 其他
-      cursor: { zh: '示例插件', en: 'Demo' },
-      mcp: { zh: 'MCP 服务', en: 'MCP' },
-      review: { zh: '评审', en: 'Review' },
-      working: { zh: '工作区', en: 'Workspace' },
-      create: { zh: '创建', en: 'Create' },
-      course: { zh: '课程', en: 'Course' },
-      app: { zh: '应用', en: 'App' },
-      load: { zh: '加载', en: 'Load' },
-      tool: { zh: '工具清单', en: 'Inventory' },
-      unknown: { zh: '其他', en: 'Other' },
-    }
-
-    /** 取组的人话名；表里没有就返回原名 */
-    function labelOf(tag) {
-      const entry = GROUP_LABELS[tag]
-      if (!entry) return tag
-      return T.lang === 'en' ? entry.en : entry.zh
-    }
-
-    /** host 端对"查不到归属"的工具用这个占位，客户端翻成人话 */
     function ownerLabel(title) {
       if (title === '(未归属)') return T.unknownOwner
-      return title
+      return title || T.unknownOwner
     }
 
+    // ---------------------------------------------------------------------
+    // 样式（全部从 tint() 派生）
+    // ---------------------------------------------------------------------
     const S = {
       wrap: { position: 'relative', display: 'inline-flex', alignItems: 'center' },
       pill: {
@@ -218,118 +217,163 @@ window.__ModuleLoader__.load({
         fontSize: 12,
         lineHeight: '18px',
         borderRadius: 999,
-        border: '1px solid rgba(127,127,127,0.28)',
-        background: 'rgba(127,127,127,0.10)',
+        border: `1px solid ${tint(26)}`,
+        background: tint(10),
         color: 'inherit',
         whiteSpace: 'nowrap',
         cursor: 'pointer',
         userSelect: 'none',
         transition: 'background 120ms ease, border-color 120ms ease, box-shadow 120ms ease',
       },
-      dot: { width: 7, height: 7, borderRadius: '50%', flex: '0 0 auto' },
-      label: { fontWeight: 500 },
-      mellow: { opacity: 0.6 },
+      dot: { width: 7, height: 7, borderRadius: '50%', flex: '0 0 auto', background: ACCENT },
+      dotOff: { width: 7, height: 7, borderRadius: '50%', flex: '0 0 auto', background: tint(45) },
+      mellow: { opacity: 0.62 },
       panel: {
-        position: 'absolute',
-        bottom: 'calc(100% + 8px)',
-        left: 0,
-        zIndex: 40,
-        width: 340,
-        maxHeight: '70vh',
-        overflowY: 'auto',
-        padding: '14px 14px 12px',
-        borderRadius: 12,
-        border: '1px solid rgba(127,127,127,0.30)',
-        background: 'canvas',
-        color: 'inherit',
-        boxShadow: '0 8px 28px rgba(0,0,0,0.22)',
+        position: 'fixed',
+        zIndex: 60,
+        width: 'min(380px, calc(100vw - 32px))',
+        maxHeight: 'min(72vh, 560px)',
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        borderRadius: 14,
+        border: `1px solid ${tint(24)}`,
+        background: 'Canvas',
+        color: 'CanvasText',
+        boxShadow: '0 12px 36px rgba(0,0,0,0.28)',
         fontSize: 12,
         lineHeight: '18px',
       },
-      header: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 },
+      header: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px 8px' },
       title: { fontWeight: 600, fontSize: 13 },
-      badge: {
-        marginLeft: 'auto',
-        padding: '1px 8px',
-        borderRadius: 999,
-        fontSize: 11,
-        background: 'rgba(34,197,94,0.16)',
-        color: '#16a34a',
-      },
-      goal: { opacity: 0.75, marginBottom: 10, wordBreak: 'break-word' },
-      grid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 },
-      cell: { padding: '8px 10px', borderRadius: 8, background: 'rgba(127,127,127,0.10)' },
-      cellLabel: { fontSize: 11, opacity: 0.65, marginBottom: 2 },
+      badge: { marginLeft: 'auto', padding: '1px 8px', borderRadius: 999, fontSize: 11, background: ACCENT_SOFT, color: ACCENT },
+      close: { border: 'none', background: 'transparent', color: 'inherit', opacity: 0.5, cursor: 'pointer', fontSize: 14, lineHeight: '14px', padding: 2 },
+      tabs: { display: 'flex', gap: 4, padding: '0 10px 8px', borderBottom: `1px solid ${tint(14)}` },
+      tab: { border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer', padding: '4px 10px', borderRadius: 8, fontSize: 12, opacity: 0.6 },
+      tabActive: { background: tint(12), opacity: 1, fontWeight: 500 },
+      body: { padding: '12px 14px 14px', overflowY: 'auto' },
+      row: { display: 'flex', alignItems: 'center', gap: 8 },
+      sectionTitle: { fontSize: 11, opacity: 0.6, margin: '12px 0 6px' },
+      grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 },
+      cell: { padding: '8px 10px', borderRadius: 10, background: tint(9) },
+      cellLabel: { fontSize: 11, opacity: 0.62, marginBottom: 2 },
       cellValue: { fontSize: 18, fontWeight: 600, fontVariantNumeric: 'tabular-nums' },
-      barRow: { marginBottom: 10 },
-      barLabel: { display: 'flex', justifyContent: 'space-between', fontSize: 11, opacity: 0.75, marginBottom: 4 },
-      barTrack: { height: 6, borderRadius: 999, background: 'rgba(127,127,127,0.20)', overflow: 'hidden' },
-      barFill: { height: '100%', borderRadius: 999, background: 'linear-gradient(90deg,#22c55e,#16a34a)' },
-      meta: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 8 },
-      chip: {
-        padding: '1px 8px',
-        borderRadius: 999,
-        fontSize: 11,
-        background: 'rgba(127,127,127,0.16)',
-      },
-      hint: { opacity: 0.55, fontSize: 11, lineHeight: '16px' },
-      sectionTitle: { fontSize: 11, opacity: 0.6, margin: '10px 0 6px' },
       chipsBox: { display: 'flex', flexWrap: 'wrap', gap: 4 },
+      chip: { padding: '1px 8px', borderRadius: 999, fontSize: 11, background: tint(14) },
       chipClick: { cursor: 'pointer' },
-      chipActive: { background: 'rgba(34,197,94,0.22)', color: '#16a34a' },
-      toolList: {
-        marginTop: 6,
-        maxHeight: 150,
-        overflowY: 'auto',
-        border: '1px solid rgba(127,127,127,0.22)',
+      chipActive: { background: ACCENT_SOFT, color: ACCENT },
+      search: {
+        width: '100%',
+        boxSizing: 'border-box',
+        padding: '5px 10px',
         borderRadius: 8,
-        padding: '6px 8px',
+        border: `1px solid ${tint(22)}`,
+        background: tint(6),
+        color: 'inherit',
+        fontSize: 12,
+        outline: 'none',
       },
+      treeGroup: { marginTop: 6 },
+      treeHead: {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '4px 6px',
+        borderRadius: 8,
+        cursor: 'pointer',
+        background: tint(7),
+      },
+      treeCount: { marginLeft: 'auto', opacity: 0.6, fontSize: 11 },
+      toolList: { marginTop: 4, paddingLeft: 10 },
       toolRow: {
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
         fontSize: 11,
-        lineHeight: '16px',
+        lineHeight: '17px',
         opacity: 0.85,
         whiteSpace: 'nowrap',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
       },
-      close: {
-        border: 'none',
-        background: 'transparent',
-        color: 'inherit',
-        opacity: 0.5,
-        cursor: 'pointer',
-        fontSize: 14,
-        lineHeight: '14px',
-        padding: 2,
-      },
+      eventRow: { display: 'flex', gap: 8, alignItems: 'baseline', padding: '3px 0', borderBottom: `1px dashed ${tint(12)}` },
+      eventKind: { fontSize: 11, padding: '0 6px', borderRadius: 6, background: tint(12) },
+      eventTime: { marginLeft: 'auto', opacity: 0.5, fontSize: 11, fontVariantNumeric: 'tabular-nums' },
+      hint: { opacity: 0.55, fontSize: 11, lineHeight: '16px' },
+      emptyBox: { padding: '10px 0', opacity: 0.6 },
     }
 
-    /**
-     * 磁盘快照超过 12 小时就认为"可能过期"，返回人能读的时长（如 "7d"），否则空串。
-     * 为什么需要：进程重启后 current.json 不会自动清，徽章会一直显示"收窄中"。
-     */
-    function staleAge(state) {
-      const at = Number(state && (state.at || state.startedAt)) || 0
-      if (!at) return ''
-      const ms = Date.now() - at
-      if (ms < 12 * 3600 * 1000) return ''
-      const hours = Math.round(ms / 3600000)
-      return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`
+    // ---------------------------------------------------------------------
+    // 小组件
+    // ---------------------------------------------------------------------
+    /** 环形进度 */
+    function Ring(props) {
+      const ratio = Math.max(0, Math.min(1, Number(props.ratio) || 0))
+      const size = props.size || 68
+      const stroke = 7
+      const r = (size - stroke) / 2
+      const c = 2 * Math.PI * r
+      return h('svg', { width: size, height: size, viewBox: `0 0 ${size} ${size}`, style: { flex: '0 0 auto' } },
+        h('circle', { cx: size / 2, cy: size / 2, r, fill: 'none', stroke: tint(16), strokeWidth: stroke }),
+        h('circle', {
+          cx: size / 2,
+          cy: size / 2,
+          r,
+          fill: 'none',
+          stroke: ACCENT,
+          strokeWidth: stroke,
+          strokeLinecap: 'round',
+          strokeDasharray: `${c}`,
+          strokeDashoffset: `${c * (1 - ratio)}`,
+          transform: `rotate(-90 ${size / 2} ${size / 2})`,
+          style: { transition: 'stroke-dashoffset 300ms ease' },
+        }),
+        h('text', {
+          x: '50%',
+          y: '52%',
+          textAnchor: 'middle',
+          dominantBaseline: 'middle',
+          fill: 'currentColor',
+          fontSize: 13,
+          fontWeight: 600,
+        }, `${Math.round(ratio * 100)}%`),
+      )
     }
 
-    /** 详情面板（纯展示，不持有状态） */
-    /** 详情面板（纯展示；fixed 定位避免被 composer dock 的 overflow 裁掉） */
-    function Panel(props) {
+    /** 迷你柱状图：最近几次请求的工具表大小 */
+    function Bars(props) {
+      const items = Array.isArray(props.items) ? props.items.filter((x) => Number(x.tools) > 0) : []
+      if (items.length === 0) return h('div', { style: S.hint }, T.empty)
+      const max = Math.max(...items.map((x) => Number(x.tools) || 0))
+      const width = 6
+      return h('div', { style: { display: 'flex', alignItems: 'flex-end', gap: 3, height: 34 } },
+        ...items.map((item, i) => {
+          const value = Number(item.tools) || 0
+          const ratio = max > 0 ? value / max : 0
+          return h('div', {
+            key: i,
+            title: `${value} tools · ${fmt(item.toolsChars)} chars`,
+            style: {
+              width,
+              height: `${Math.max(6, Math.round(ratio * 34))}px`,
+              borderRadius: 2,
+              background: i === items.length - 1 ? ACCENT : tint(34),
+            },
+          })
+        }),
+      )
+    }
+
+    function Tab(props) {
+      return h('button', {
+        style: { ...S.tab, ...(props.active ? S.tabActive : {}) },
+        onClick: props.onClick,
+      }, props.label)
+    }
+
+    // ---------------------------------------------------------------------
+    // 概览
+    // ---------------------------------------------------------------------
+    function OverviewTab(props) {
       const state = props.state || {}
-      const anchor = props.anchor || { left: 12, bottom: 80 }
-      // 进场过渡：先透明+下移 4px，下一帧再到位（120ms）
-      const [visible, setVisible] = React.useState(false)
-      React.useEffect(() => {
-        const id = requestAnimationFrame(() => setVisible(true))
-        return () => cancelAnimationFrame(id)
-      }, [])
       const removed = Number(state.denyCount) || 0
       const kept = Number(state.keptCount) || 0
       const total = removed + kept
@@ -337,166 +381,273 @@ window.__ModuleLoader__.load({
       const perTurn = Number(state.savingsPerTurn) || 0
       const payback = Number(state.paybackTurns) || 0
       const groups = Array.isArray(state.groups) ? state.groups : []
-      // ---- 名单：保留了什么 / 砍了什么（v0.2.1）----
-      const keptTools = Array.isArray(state.keptTools) ? state.keptTools : []
-      const deniedTools = Array.isArray(state.deniedTools) ? state.deniedTools : []
-      const [filter, setFilter] = React.useState('')
-      // 【v0.3.0】按"插件"分组，而不是按标签分组 —— 用户想知道的是"哪个插件被砍了"
-      const toolOwners = state.toolOwners && typeof state.toolOwners === 'object' ? state.toolOwners : {}
-      const deniedByOwner = Array.isArray(state.deniedByOwner) ? state.deniedByOwner : []
-      const shown = filter ? deniedTools.filter((name) => toolOwners[name] === filter) : deniedTools
-      const hasLists = keptTools.length > 0 || deniedTools.length > 0
+      const probe = state.probe || {}
+      const recent = Array.isArray(probe.recent) ? probe.recent : []
+      const stage = state.stage || ''
+      const age = staleAge(state)
 
-      return h('div', {
-        style: {
-          ...S.panel,
-          position: 'fixed',
-          left: anchor.left,
-          bottom: anchor.bottom,
-          width: 300,
-          opacity: visible ? 1 : 0,
-          transform: visible ? 'translateY(0)' : 'translateY(4px)',
-          transition: 'opacity 120ms ease, transform 120ms ease',
-        },
-        role: 'dialog',
-        'data-tg-panel': '1',
-        'aria-label': T.active,
-        onClick: (e) => e.stopPropagation(),
-      },
-        h('div', { style: S.header },
-          h('span', { style: S.title }, T.active),
-          h('span', { style: S.badge }, T.running),
-          h('button', { style: S.close, title: T.close, 'aria-label': T.close, onClick: props.onClose }, '✕'),
+      return h('div', null,
+        h('div', { style: { ...S.row, gap: 14, marginBottom: 12 } },
+          h(Ring, { ratio }),
+          h('div', { style: { minWidth: 0 } },
+            h('div', { style: S.cellLabel }, T.strength),
+            h('div', { style: { fontSize: 13, fontWeight: 600, marginBottom: 4 } }, `${removed} / ${total}`),
+            h('div', { style: S.hint }, perTurn > 0 ? `${T.saving} ${fmt(perTurn)} ${T.token}` : '—'),
+          ),
         ),
-        state.goal ? h('div', { style: S.goal }, `${T.goal}${T.colon}${state.goal}`) : null,
-        // 给第一次见到它的陌生人一句话说明（分享给别人时尤其重要）
-        h('div', { style: { ...S.hint, marginBottom: 10 } }, T.what),
-        h('div', { style: S.grid },
+        h('div', { style: S.grid2 },
           h('div', { style: S.cell },
             h('div', { style: S.cellLabel }, T.removed),
-            h('div', { style: S.cellValue, 'data-testid': 'tg-removed' }, String(removed)),
+            h('div', { style: S.cellValue }, String(removed)),
           ),
           h('div', { style: S.cell },
             h('div', { style: S.cellLabel }, T.kept),
             h('div', { style: S.cellValue }, String(kept)),
           ),
         ),
-        h('div', { style: S.barRow },
-          h('div', { style: S.barLabel },
-            h('span', null, T.strength),
-            h('span', null, `${Math.round(ratio * 100)}%`),
-          ),
-          h('div', { style: S.barTrack },
-            h('div', { style: { ...S.barFill, width: `${Math.round(ratio * 100)}%` } }),
+        h('div', { style: S.sectionTitle }, T.toolsNow),
+        h('div', { style: S.row },
+          h(Bars, { items: recent }),
+          h('div', { style: { marginLeft: 'auto', textAlign: 'right' } },
+            h('div', { style: { fontSize: 13, fontWeight: 600 } }, probe.tools ? String(probe.tools) : '—'),
+            h('div', { style: S.hint }, probe.toolsChars ? `${fmt(probe.toolsChars)} chars` : ''),
           ),
         ),
-        perTurn > 0
-          ? h('div', { style: { marginBottom: 8 } },
-              `${T.saving} `,
-              h('strong', null, `${fmt(perTurn)} ${T.token}`),
-              payback > 0 ? ` · ${T.payback} ${payback} ${T.paybackUnit}` : '',
-            )
-          : null,
+        h('div', { style: S.sectionTitle }, T.stage),
+        h('div', { style: S.row },
+          stage ? h('span', { style: { ...S.chip, background: ACCENT_SOFT, color: ACCENT } }, stage) : h('span', { style: S.hint }, T.noStage),
+          h('span', { style: { marginLeft: 'auto', ...S.hint } }, payback > 0 ? `${T.payback} ${payback} ${T.turns}` : ''),
+        ),
         groups.length > 0
-          ? h('div', { style: S.meta },
-              h('span', { style: { opacity: 0.65 } }, `${T.groups}${T.colon}`),
-              ...groups.map((g) => h('span', { key: g, style: S.chip, title: g }, labelOf(g))),
+          ? h('div', null,
+              h('div', { style: S.sectionTitle }, T.groups),
+              h('div', { style: S.chipsBox }, ...groups.map((g) => h('span', { key: g, style: S.chip }, g))),
             )
           : null,
-        // ---- 名单区：先看保留（通常 <30 个），再看砍掉（按组过滤 + 滚动列表）----
-        hasLists
-          ? h('div', null,
-              h('div', { style: S.sectionTitle }, `${T.keptTools}（${keptTools.length || kept}）`),
-              h('div', { style: S.chipsBox },
-                keptTools.length === 0
-                  ? h('span', { style: S.hint }, T.empty)
-                  : keptTools.map((name) => h('span', { key: name, style: S.chip, title: name }, name)),
-              ),
-              h('div', { style: S.sectionTitle }, `${T.deniedTools}（${deniedTools.length || removed}）`),
-              h('div', { style: S.chipsBox },
-                h('span', {
-                  key: '__all',
-                  style: { ...S.chip, ...S.chipClick, ...(filter ? {} : S.chipActive) },
-                  onClick: () => setFilter(''),
-                }, `${T.all} ${deniedTools.length}`),
-                ...deniedByOwner.map(({ title, count }) =>
-                  h('span', {
-                    key: title,
-                    style: { ...S.chip, ...S.chipClick, ...(filter === title ? S.chipActive : {}) },
-                    title: `${title} × ${count}`,
-                    onClick: () => setFilter(filter === title ? '' : title),
-                  }, `${ownerLabel(title)} ${count}`),
-                ),
-              ),
-              h('div', { style: S.toolList },
-                shown.length === 0
-                  ? h('div', { style: S.toolRow }, T.empty)
-                  : shown.slice(0, 400).map((name) =>
-                      h('div', { key: name, style: S.toolRow, title: name },
-                        h('span', null, name),
-                        toolOwners[name]
-                          ? h('span', { style: { opacity: 0.45, marginLeft: 8 } }, ownerLabel(toolOwners[name]))
-                          : null,
-                      ),
-                    ),
-              ),
-            )
-          : h('div', { style: S.sectionTitle }, T.none),
-        // 状态是磁盘上的快照：写得很久以前就可能是过期数据（进程重启/任务没正常结束）
-        staleAge(state) ? h('div', { style: { ...S.hint, color: '#d97706', marginBottom: 6 } },
-          T.stale.replace('{age}', staleAge(state))) : null,
-        h('div', { style: S.hint }, T.hint),
+        state.goal ? h('div', null, h('div', { style: S.sectionTitle }, T.goal), h('div', { style: S.hint }, state.goal)) : null,
+        age ? h('div', { style: { ...S.hint, color: WARN, marginTop: 8 } }, T.stale.replace('{age}', age)) : null,
+        h('div', { style: { ...S.hint, marginTop: 10 } }, T.hintEnd),
       )
     }
 
+    // ---------------------------------------------------------------------
+    // 工具（搜索 + 按插件折叠）
+    // ---------------------------------------------------------------------
+    function ToolsTab(props) {
+      const state = props.state || {}
+      const denied = Array.isArray(state.deniedTools) ? state.deniedTools : []
+      const kept = Array.isArray(state.keptTools) ? state.keptTools : []
+      const owners = state.toolOwners && typeof state.toolOwners === 'object' ? state.toolOwners : {}
+      const [query, setQuery] = React.useState('')
+      const [open, setOpen] = React.useState({})
+
+      const q = query.trim().toLowerCase()
+      const match = (name) => !q || name.toLowerCase().includes(q) || String(owners[name] || '').toLowerCase().includes(q)
+      const shownDenied = denied.filter(match)
+      const shownKept = kept.filter(match)
+
+      // 按插件分组
+      const groups = new Map()
+      for (const tool of shownDenied) {
+        const key = ownerLabel(owners[tool])
+        if (!groups.has(key)) groups.set(key, [])
+        groups.get(key).push(tool)
+      }
+      const groupList = [...groups.entries()].sort((a, b) => b[1].length - a[1].length)
+
+      return h('div', null,
+        h('input', {
+          style: S.search,
+          placeholder: T.search,
+          value: query,
+          onChange: (e) => setQuery(e.target.value),
+        }),
+        h('div', { style: S.sectionTitle }, `${T.keptTools}（${shownKept.length}）`),
+        shownKept.length === 0
+          ? h('div', { style: S.hint }, q ? T.noMatch : T.empty)
+          : h('div', { style: S.chipsBox }, ...shownKept.map((name) => h('span', { key: name, style: S.chip, title: name }, name))),
+        h('div', { style: S.sectionTitle }, `${T.removedTools}（${shownDenied.length}）`),
+        groupList.length === 0
+          ? h('div', { style: S.hint }, q ? T.noMatch : T.empty)
+          : h('div', null,
+              ...groupList.map(([owner, list]) =>
+                h('div', { style: S.treeGroup, key: owner },
+                  h('div', {
+                    style: S.treeHead,
+                    onClick: () => setOpen((prev) => ({ ...prev, [owner]: !prev[owner] })),
+                  },
+                    h('span', { style: { opacity: 0.55, width: 10 } }, open[owner] ? '▾' : '▸'),
+                    h('span', null, owner),
+                    h('span', { style: S.treeCount }, String(list.length)),
+                  ),
+                  open[owner]
+                    ? h('div', { style: S.toolList },
+                        ...list.map((name) => h('div', { key: name, style: S.toolRow, title: name }, name)),
+                      )
+                    : null,
+                ),
+              ),
+            ),
+      )
+    }
+
+    // ---------------------------------------------------------------------
+    // 历史
+    // ---------------------------------------------------------------------
+    const KIND_LABEL = {
+      switch: () => T.eventSwitch,
+      block: () => T.eventBlock,
+      deny: () => T.eventDeny,
+      restrict: () => T.eventRestrict,
+      grant: () => T.eventGrant,
+      reset: () => T.eventReset,
+      degrade: () => T.eventDegrade,
+    }
+
+    function HistoryTab(props) {
+      const state = props.state || {}
+      const events = Array.isArray(state.history) ? state.history : []
+      if (events.length === 0) return h('div', { style: S.emptyBox }, T.historyEmpty)
+      return h('div', null,
+        ...events.map((event, i) => {
+          const label = KIND_LABEL[event.kind] ? KIND_LABEL[event.kind]() : event.kind
+          const detail =
+            event.kind === 'switch' || event.kind === 'block'
+              ? `${event.from || '?'} → ${event.to || '?'}${event.kw ? `（${event.kw}）` : ''}`
+              : event.kind === 'deny'
+                ? `${event.tool || ''}${event.stage ? ` @${event.stage}` : ''}`
+                : event.kind === 'restrict'
+                  ? `${event.stage || ''}${event.deny ? ` −${event.deny}` : ''}`
+                  : event.by || ''
+          return h('div', { key: i, style: S.eventRow },
+            h('span', { style: S.eventKind }, label),
+            h('span', { style: { fontSize: 11, opacity: 0.8, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, detail),
+            h('span', { style: S.eventTime }, clockOf(event.t)),
+          )
+        }),
+      )
+    }
+
+    // ---------------------------------------------------------------------
+    // 面板
+    // ---------------------------------------------------------------------
+    function Panel(props) {
+      const state = props.state || {}
+      const anchor = props.anchor || { left: 12, bottom: 80 }
+      const [tab, setTab] = React.useState('overview')
+      const [visible, setVisible] = React.useState(false)
+
+      React.useEffect(() => {
+        const id = requestAnimationFrame(() => setVisible(true))
+        return () => cancelAnimationFrame(id)
+      }, [])
+
+      return h('div', {
+        style: {
+          ...S.panel,
+          left: anchor.left,
+          bottom: anchor.bottom,
+          opacity: visible ? 1 : 0,
+          transform: visible ? 'translateY(0)' : 'translateY(6px)',
+          transition: 'opacity 120ms ease, transform 120ms ease',
+        },
+        role: 'dialog',
+        'aria-label': T.title,
+        'data-tg-panel': '1',
+        onClick: (e) => e.stopPropagation(),
+      },
+        h('div', { style: S.header },
+          h('span', { style: S.title }, T.title),
+          h('span', { style: S.badge }, T.running),
+          h('button', { style: S.close, title: T.close, 'aria-label': T.close, onClick: props.onClose }, '✕'),
+        ),
+        h('div', { style: S.tabs },
+          h(Tab, { label: T.tabOverview, active: tab === 'overview', onClick: () => setTab('overview') }),
+          h(Tab, { label: T.tabTools, active: tab === 'tools', onClick: () => setTab('tools') }),
+          h(Tab, { label: T.tabHistory, active: tab === 'history', onClick: () => setTab('history') }),
+        ),
+        h('div', { style: S.body },
+          tab === 'overview' ? h(OverviewTab, { state }) : null,
+          tab === 'tools' ? h(ToolsTab, { state }) : null,
+          tab === 'history' ? h(HistoryTab, { state }) : null,
+        ),
+      )
+    }
+
+    // ---------------------------------------------------------------------
+    // 胶囊
+    // ---------------------------------------------------------------------
     function Badge() {
       const [state, setState] = React.useState(null)
       const [open, setOpen] = React.useState(false)
       const [anchor, setAnchor] = React.useState(null)
       const wrapRef = React.useRef(null)
 
-      /** 开关面板：打开前先量出胶囊的位置，面板用 fixed 贴在它上方 */
-      const toggle = () => {
-        if (open) {
-          setOpen(false)
-          return
-        }
-        try {
-          const rect = wrapRef.current.getBoundingClientRect()
-          setAnchor({
-            left: Math.max(8, Math.min(rect.left, window.innerWidth - 320)),
-            bottom: window.innerHeight - rect.top + 8,
-          })
-        } catch {
-          setAnchor({ left: 12, bottom: 80 })
-        }
-        setOpen(true)
-      }
-
-      // 轮询 + 关闭交互（点外面 / Esc）——全部在 unmount 时清理
+      // 数据：优先 SSE，失败退回轮询
       React.useEffect(() => {
         let alive = true
-        const tick = async () => {
-          try {
-            const response = await fetch(ENDPOINT, { cache: 'no-store' })
-            const data = await response.json()
-            if (alive) setState(data)
-          } catch {
-            if (alive) setState({ active: false })
-          }
+        let es = null
+        let timer = null
+        const apply = (data) => {
+          if (alive && data && typeof data === 'object') setState(data)
         }
-        tick()
-        const timer = setInterval(tick, POLL_MS)
+        const poll = () => {
+          const tick = async () => {
+            try {
+              const response = await fetch(ENDPOINT, { cache: 'no-store' })
+              apply(await response.json())
+            } catch {
+              /* 网络抖动忽略 */
+            }
+          }
+          tick()
+          timer = setInterval(tick, POLL_MS)
+        }
+        try {
+          if (typeof EventSource === 'function') {
+            es = new EventSource(STREAM)
+            es.onmessage = (event) => {
+              try {
+                apply(JSON.parse(event.data))
+              } catch {
+                /* 坏帧忽略 */
+              }
+            }
+            es.onerror = () => {
+              // 浏览器会自己重连；如果反复失败，退回轮询
+              if (es && es.readyState === 2) {
+                try {
+                  es.close()
+                } catch {
+                  /* ignore */
+                }
+                es = null
+                poll()
+              }
+            }
+          } else {
+            poll()
+          }
+        } catch {
+          poll()
+        }
         return () => {
           alive = false
-          clearInterval(timer)
+          if (es) {
+            try {
+              es.close()
+            } catch {
+              /* ignore */
+            }
+          }
+          if (timer) clearInterval(timer)
         }
       }, [])
 
+      // 点外面 / Esc 关闭
       React.useEffect(() => {
         if (!open) return undefined
         const onDown = (event) => {
-          // 点面板自身不算"点外面"（面板是 fixed 定位，不在 wrapRef 里面）
           const target = event && event.target
           if (target && typeof target.closest === 'function' && target.closest('[data-tg-panel]')) return
           if (wrapRef.current && !wrapRef.current.contains(target)) setOpen(false)
@@ -512,27 +663,43 @@ window.__ModuleLoader__.load({
         }
       }, [open])
 
-      // 第一次还没回来 → 不占位，避免闪烁
+      const toggle = () => {
+        if (open) {
+          setOpen(false)
+          return
+        }
+        try {
+          const rect = wrapRef.current.getBoundingClientRect()
+          setAnchor({
+            left: Math.max(8, Math.min(rect.left, window.innerWidth - 396)),
+            bottom: window.innerHeight - rect.top + 8,
+          })
+        } catch {
+          setAnchor({ left: 12, bottom: 80 })
+        }
+        setOpen(true)
+      }
+
       if (state === null) return null
 
+      // 空态：说清"它在看什么"
       if (!state.active) {
-        // 【v0.4.0】空态说清"它在看什么"：工具表全开，有数字就带上数字
-        // 数字来源：task_end 快照里的 knownTools；没有就用 denyCount + keptCount（两者都必须是数字）
-        // 绝不能只拿 denyCount 当总数——那会把 239 显示成 219
-        const kept = Number(state.keptCount)
-        const known = Number(state.knownTools) || (Number.isFinite(kept) ? (Number(state.denyCount) || 0) + kept : 0)
+        const removed = Number(state.denyCount) || 0
+        const kept = Number(state.keptCount) || 0
+        const known = Number(state.knownTools) || (Number.isFinite(kept) && kept > 0 ? removed + kept : 0)
         return h('span', {
-          style: { ...S.pill, cursor: 'default', opacity: 0.6, border: 'none', background: 'transparent' },
-          title: T.inactiveTitle,
+          style: { ...S.pill, cursor: 'default', opacity: 0.62, border: 'none', background: 'transparent' },
+          title: T.what,
         },
-          h('span', { style: { ...S.dot, background: '#9ca3af' } }),
-          h('span', { style: S.mellow }, `${T.allOpen}${known > 0 ? `（${known}）` : ''}`),
+          h('span', { style: S.dotOff }),
+          h('span', { style: S.mellow }, `${T.fullTable}${known > 0 ? `（${known}）` : ''}`),
         )
       }
 
       const removed = Number(state.denyCount) || 0
       const perTurn = Number(state.savingsPerTurn) || 0
-      const groups = Array.isArray(state.groups) && state.groups.length > 0 ? state.groups.map(labelOf).join(' + ') : '—'
+      const groups = Array.isArray(state.groups) && state.groups.length > 0 ? state.groups.join(' + ') : '—'
+      const stage = state.stage || ''
 
       return h('span', { style: S.wrap, ref: wrapRef },
         h('span', {
@@ -540,24 +707,23 @@ window.__ModuleLoader__.load({
           role: 'button',
           tabIndex: 0,
           'aria-expanded': open,
-          title: `${T.active} · ${groups}`,
+          title: `${T.title} · ${groups}`,
           onClick: toggle,
-          // 键盘可达：focus 时给一圈绿色环（:focus-visible 无法内联，用事件代替）
-          onFocus: (e) => {
-            e.currentTarget.style.boxShadow = '0 0 0 2px rgba(34,197,94,0.45)'
-          },
-          onBlur: (e) => {
-            e.currentTarget.style.boxShadow = 'none'
-          },
           onKeyDown: (e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
               toggle()
             }
           },
+          onFocus: (e) => {
+            e.currentTarget.style.boxShadow = `0 0 0 2px ${ACCENT_SOFT}`
+          },
+          onBlur: (e) => {
+            e.currentTarget.style.boxShadow = 'none'
+          },
         },
-          h('span', { style: { ...S.dot, background: '#22c55e' } }),
-          h('span', { style: S.label }, `${T.active} · ${groups}`),
+          h('span', { style: S.dot }),
+          h('span', { style: { fontWeight: 500 } }, stage ? `${stage}` : groups),
           h('span', { style: S.mellow }, `−${removed}`),
           perTurn > 0 ? h('span', { style: S.mellow }, `${T.saving} ${fmt(perTurn)}`) : null,
         ),
