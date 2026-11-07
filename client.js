@@ -25,6 +25,7 @@ window.__ModuleLoader__.load({
 
     const ENDPOINT = '/task-guard/state'
     const STREAM = '/task-guard/stream'
+    const ACTION = '/task-guard/action'
     const POLL_MS = 4000
 
     // ---------------------------------------------------------------------
@@ -77,6 +78,18 @@ window.__ModuleLoader__.load({
         minutesAgo: '{n} 分钟前',
         hoursAgo: '{n} 小时前',
         daysAgo: '{n} 天前',
+        manualTitle: '手动调工具表',
+        manualHint: '点这里：选工具组 → 收窄；或一键恢复',
+        pickGroups: '选要保留的工具组（不选=全部保留）',
+        applyNarrow: '收窄到所选',
+        endTask: '结束任务（恢复全部工具）',
+        queued: '已排队：下一次工具调用前生效',
+        failed: '失败',
+        lastAction: '上一次动作',
+        selectAll: '全选',
+        clearAll: '清空',
+        registered: '注册',
+        actualSent: '实发',
       },
       en: {
         title: 'Task narrowing',
@@ -124,6 +137,18 @@ window.__ModuleLoader__.load({
         minutesAgo: '{n}m ago',
         hoursAgo: '{n}h ago',
         daysAgo: '{n}d ago',
+        manualTitle: 'Adjust the tool table',
+        manualHint: 'Click to pick groups, narrow, or restore',
+        pickGroups: 'Keep these groups (none selected = keep everything)',
+        applyNarrow: 'Narrow to selection',
+        endTask: 'End task (restore all tools)',
+        queued: 'Queued: takes effect before the next tool call',
+        failed: 'failed',
+        lastAction: 'Last action',
+        selectAll: 'All',
+        clearAll: 'Clear',
+        registered: 'registered',
+        actualSent: 'sent',
       },
     }
 
@@ -238,6 +263,7 @@ window.__ModuleLoader__.load({
       header: { display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px 8px' },
       title: { fontWeight: 600, fontSize: 13 },
       badge: { marginLeft: 'auto', padding: '1px 8px', borderRadius: 999, fontSize: 11, background: ACCENT_SOFT, color: ACCENT },
+      badgeOff: { marginLeft: 'auto', padding: '1px 8px', borderRadius: 999, fontSize: 11, background: tint(14), opacity: 0.7 },
       close: { border: 'none', background: 'transparent', color: 'inherit', opacity: 0.5, cursor: 'pointer', fontSize: 14, lineHeight: '14px', padding: 2 },
       tabs: { display: 'flex', gap: 4, padding: '0 10px 8px', borderBottom: `1px solid ${tint(14)}` },
       tab: { border: 'none', background: 'transparent', color: 'inherit', cursor: 'pointer', padding: '4px 10px', borderRadius: 8, fontSize: 12, opacity: 0.6 },
@@ -358,6 +384,85 @@ window.__ModuleLoader__.load({
         style: { ...S.tab, ...(props.active ? S.tabActive : {}) },
         onClick: props.onClick,
       }, props.label)
+    }
+
+    /** 主按钮 / 次按钮的统一样式 */
+    function buttonStyle(primary, disabled) {
+      return {
+        border: `1px solid ${primary ? ACCENT : tint(26)}`,
+        background: primary ? ACCENT_SOFT : tint(8),
+        color: 'inherit',
+        borderRadius: 8,
+        padding: '5px 12px',
+        fontSize: 12,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.45 : 1,
+        transition: 'background 120ms ease, opacity 120ms ease',
+      }
+    }
+
+    // ---------------------------------------------------------------------
+    // 手动调工具表（空态也能用）
+    // ---------------------------------------------------------------------
+    function ManualView(props) {
+      const state = props.state || {}
+      const groups = Array.isArray(state.groups) ? state.groups : []
+      const [picked, setPicked] = React.useState([])
+      const busy = Boolean(props.busy)
+      const notice = props.notice || ''
+      const lastAction = state.lastAction && typeof state.lastAction === 'object' ? state.lastAction : null
+
+      const toggle = (tag) => {
+        setPicked((prev) => (prev.includes(tag) ? prev.filter((x) => x !== tag) : [...prev, tag]))
+      }
+      const registered = Number(state.registeredTools) || 0
+      const actual = Number(state.probe && state.probe.tools) || 0
+
+      return h('div', null,
+        h('div', { style: { ...S.cell, marginBottom: 10 } },
+          h('div', { style: S.cellLabel }, T.fullTable),
+          h('div', { style: { fontSize: 15, fontWeight: 600 } }, `${Number(state.toolsCount) || 0}`),
+          h('div', { style: S.hint },
+            registered && actual && registered !== actual
+              ? `${T.registered} ${registered} · ${T.actualSent} ${actual}`
+              : '',
+          ),
+        ),
+        h('div', { style: S.sectionTitle }, T.pickGroups),
+        groups.length === 0
+          ? h('div', { style: S.hint }, T.empty)
+          : h('div', { style: S.chipsBox },
+              ...groups.map((group) =>
+                h('span', {
+                  key: group.tag,
+                  style: { ...S.chip, ...S.chipClick, ...(picked.includes(group.tag) ? S.chipActive : {}) },
+                  title: `${group.tag} · ${group.count}`,
+                  onClick: () => toggle(group.tag),
+                }, `${group.tag} ${group.count}`),
+              ),
+            ),
+        h('div', { style: { display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' } },
+          h('button', {
+            style: buttonStyle(true, busy || picked.length === 0),
+            disabled: busy || picked.length === 0,
+            onClick: () => props.onAction && props.onAction({ action: 'start', groups: picked }),
+          }, T.applyNarrow),
+          h('button', {
+            style: buttonStyle(false, busy),
+            disabled: busy,
+            onClick: () => {
+              setPicked([])
+              if (props.onAction) props.onAction({ action: 'end' })
+            },
+          }, T.endTask),
+        ),
+        notice ? h('div', { style: { ...S.hint, marginTop: 8, color: ACCENT } }, notice) : null,
+        lastAction
+          ? h('div', { style: { ...S.hint, marginTop: 8 } },
+              `${T.lastAction}：${lastAction.action || ''} ${lastAction.ok ? '✓' : `✗ ${lastAction.error || ''}`}`,
+            )
+          : null,
+      )
     }
 
     // ---------------------------------------------------------------------
@@ -527,6 +632,7 @@ window.__ModuleLoader__.load({
       const anchor = props.anchor || { left: 12, bottom: 80 }
       const [tab, setTab] = React.useState('overview')
       const [visible, setVisible] = React.useState(false)
+      const inactive = !state.active
 
       React.useEffect(() => {
         const id = requestAnimationFrame(() => setVisible(true))
@@ -549,19 +655,35 @@ window.__ModuleLoader__.load({
       },
         h('div', { style: S.header },
           h('span', { style: S.title }, T.title),
-          h('span', { style: S.badge }, T.running),
+          h('span', { style: inactive ? S.badgeOff : S.badge }, inactive ? T.off : T.running),
           h('button', { style: S.close, title: T.close, 'aria-label': T.close, onClick: props.onClose }, '✕'),
         ),
-        h('div', { style: S.tabs },
-          h(Tab, { label: T.tabOverview, active: tab === 'overview', onClick: () => setTab('overview') }),
-          h(Tab, { label: T.tabTools, active: tab === 'tools', onClick: () => setTab('tools') }),
-          h(Tab, { label: T.tabHistory, active: tab === 'history', onClick: () => setTab('history') }),
-        ),
+        // 空态没有"收窄中/工具/历史"可看，直接给手动控制
+        inactive
+          ? null
+          : h('div', { style: S.tabs },
+              h(Tab, { label: T.tabOverview, active: tab === 'overview', onClick: () => setTab('overview') }),
+              h(Tab, { label: T.tabTools, active: tab === 'tools', onClick: () => setTab('tools') }),
+              h(Tab, { label: T.tabHistory, active: tab === 'history', onClick: () => setTab('history') }),
+            ),
         h('div', { style: S.body },
-          tab === 'overview' ? h(OverviewTab, { state }) : null,
-          tab === 'tools' ? h(ToolsTab, { state }) : null,
-          tab === 'history' ? h(HistoryTab, { state }) : null,
+          inactive
+            ? h(ManualView, { state, onAction: props.onAction, busy: props.busy, notice: props.notice })
+            : tab === 'overview'
+              ? h(OverviewTab, { state })
+              : tab === 'tools'
+                ? h(ToolsTab, { state })
+                : h(HistoryTab, { state }),
         ),
+        inactive
+          ? null
+          : h('div', { style: { padding: '0 14px 12px' } },
+              h('button', {
+                style: buttonStyle(false, props.busy),
+                disabled: props.busy,
+                onClick: () => props.onAction && props.onAction({ action: 'end' }),
+              }, T.endTask),
+            ),
       )
     }
 
@@ -572,7 +694,29 @@ window.__ModuleLoader__.load({
       const [state, setState] = React.useState(null)
       const [open, setOpen] = React.useState(false)
       const [anchor, setAnchor] = React.useState(null)
+      const [busy, setBusy] = React.useState(false)
+      const [notice, setNotice] = React.useState('')
       const wrapRef = React.useRef(null)
+
+      /** 手动动作：POST 给 host，由它写请求文件；生效在"下一次工具调用前" */
+      const runAction = async (payload) => {
+        if (!payload || busy) return
+        setBusy(true)
+        setNotice('')
+        try {
+          const response = await fetch(ACTION, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          })
+          const data = await response.json()
+          setNotice(data && data.ok ? T.queued : `${T.failed}: ${(data && data.error) || '?'}`)
+        } catch (error) {
+          setNotice(`${T.failed}: ${String((error && error.message) || error)}`)
+        } finally {
+          setBusy(false)
+        }
+      }
 
       // 数据：优先 SSE，失败/卡住就退回轮询
       React.useEffect(() => {
@@ -685,17 +829,35 @@ window.__ModuleLoader__.load({
 
       if (state === null) return null
 
-      // 空态：说清"它在看什么"
+      // 空态：说清"它在看什么"，并且**可以点开手动调工具表**
       if (!state.active) {
-        const removed = Number(state.denyCount) || 0
-        const kept = Number(state.keptCount) || 0
-        const known = Number(state.knownTools) || (Number.isFinite(kept) && kept > 0 ? removed + kept : 0)
-        return h('span', {
-          style: { ...S.pill, cursor: 'default', opacity: 0.62, border: 'none', background: 'transparent' },
-          title: T.what,
-        },
-          h('span', { style: S.dotOff }),
-          h('span', { style: S.mellow }, `${T.fullTable}${known > 0 ? `（${known}）` : ''}`),
+        const known = Number(state.toolsCount) || Number(state.knownTools) || 0
+        return h('span', { style: S.wrap, ref: wrapRef },
+          h('span', {
+            style: { ...S.pill, background: 'transparent', border: `1px dashed ${tint(22)}`, opacity: 0.9 },
+            role: 'button',
+            tabIndex: 0,
+            'aria-expanded': open,
+            title: T.manualHint,
+            onClick: toggle,
+            onKeyDown: (e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                toggle()
+              }
+            },
+            onFocus: (e) => {
+              e.currentTarget.style.boxShadow = `0 0 0 2px ${ACCENT_SOFT}`
+            },
+            onBlur: (e) => {
+              e.currentTarget.style.boxShadow = 'none'
+            },
+          },
+            h('span', { style: S.dotOff }),
+            h('span', { style: S.mellow }, `${T.fullTable}${known > 0 ? `（${known}）` : ''}`),
+            h('span', { style: { opacity: 0.45, fontSize: 11 } }, '▾'),
+          ),
+          open ? h(Panel, { state, anchor, onClose: () => setOpen(false), onAction: runAction, busy, notice }) : null,
         )
       }
 
@@ -730,7 +892,7 @@ window.__ModuleLoader__.load({
           h('span', { style: S.mellow }, `−${removed}`),
           perTurn > 0 ? h('span', { style: S.mellow }, `${T.saving} ${fmt(perTurn)}`) : null,
         ),
-        open ? h(Panel, { state, anchor, onClose: () => setOpen(false) }) : null,
+        open ? h(Panel, { state, anchor, onClose: () => setOpen(false), onAction: runAction, busy, notice }) : null,
       )
     }
 
