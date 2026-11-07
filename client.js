@@ -517,8 +517,10 @@ window.__ModuleLoader__.load({
 
       if (!state.active) {
         // 【v0.4.0】空态说清"它在看什么"：工具表全开，有数字就带上数字
-        // 数字来源：task_end 快照里的 knownTools（旧快照没有就用 denyCount+keptCount 兜底）
-        const known = Number(state.knownTools) || (Number(state.denyCount) || 0) + (Number(state.keptCount) || 0)
+        // 数字来源：task_end 快照里的 knownTools；没有就用 denyCount + keptCount（两者都必须是数字）
+        // 绝不能只拿 denyCount 当总数——那会把 239 显示成 219
+        const kept = Number(state.keptCount)
+        const known = Number(state.knownTools) || (Number.isFinite(kept) ? (Number(state.denyCount) || 0) + kept : 0)
         return h('span', {
           style: { ...S.pill, cursor: 'default', opacity: 0.6, border: 'none', background: 'transparent' },
           title: T.inactiveTitle,
