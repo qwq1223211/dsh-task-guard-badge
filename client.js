@@ -49,6 +49,11 @@ window.__ModuleLoader__.load({
         paybackUnit: '轮',
         token: 'token',
         groups: '保留组',
+        keptTools: '保留的工具',
+        deniedTools: '砍掉的工具',
+        all: '全部',
+        none: '（没有名单：这份快照是旧版本写的）',
+        empty: '（没有）',
         hint: '想恢复全部工具：说「结束任务」或调用 task_end',
         stale: '这个状态可能已过期（{age}前写入），任务可能已经不在运行',
         close: '关闭',
@@ -66,6 +71,11 @@ window.__ModuleLoader__.load({
         paybackUnit: 'turns',
         token: 'token',
         groups: 'Kept groups',
+        keptTools: 'Kept tools',
+        deniedTools: 'Removed tools',
+        all: 'All',
+        none: '(no lists in this snapshot — written by an older version)',
+        empty: '(none)',
         hint: 'To restore every tool: say "end the task" or call task_end',
         stale: 'This state may be stale (written {age} ago); the task is probably not running',
         close: 'Close',
@@ -88,6 +98,22 @@ window.__ModuleLoader__.load({
       if (v >= 1000000) return `${Math.round(v / 100000) / 10}M`
       if (v >= 1000) return `${Math.round(v / 100) / 10}K`
       return String(v)
+    }
+
+    /**
+     * 工具名 → 组名（和 host 侧 dsh-task-guard 的 tagOf 口径一致）。
+     *   unity_object_create → unity
+     *   task_start          → task
+     *   mcp__meshy__x       → meshy
+     */
+    function tagOfName(name) {
+      if (typeof name !== 'string' || !name) return 'unknown'
+      if (name.startsWith('mcp__')) {
+        const parts = name.split('__')
+        return parts.length >= 3 && parts[1] ? parts[1] : 'mcp'
+      }
+      const cut = name.indexOf('_')
+      return cut <= 0 ? 'core' : name.slice(0, cut)
     }
 
     const S = {
@@ -116,7 +142,9 @@ window.__ModuleLoader__.load({
         bottom: 'calc(100% + 8px)',
         left: 0,
         zIndex: 40,
-        width: 300,
+        width: 340,
+        maxHeight: '70vh',
+        overflowY: 'auto',
         padding: '14px 14px 12px',
         borderRadius: 12,
         border: '1px solid rgba(127,127,127,0.30)',
@@ -153,6 +181,27 @@ window.__ModuleLoader__.load({
         background: 'rgba(127,127,127,0.16)',
       },
       hint: { opacity: 0.55, fontSize: 11, lineHeight: '16px' },
+      sectionTitle: { fontSize: 11, opacity: 0.6, margin: '10px 0 6px' },
+      chipsBox: { display: 'flex', flexWrap: 'wrap', gap: 4 },
+      chipClick: { cursor: 'pointer' },
+      chipActive: { background: 'rgba(34,197,94,0.22)', color: '#16a34a' },
+      toolList: {
+        marginTop: 6,
+        maxHeight: 150,
+        overflowY: 'auto',
+        border: '1px solid rgba(127,127,127,0.22)',
+        borderRadius: 8,
+        padding: '6px 8px',
+      },
+      toolRow: {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+        fontSize: 11,
+        lineHeight: '16px',
+        opacity: 0.85,
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+      },
       close: {
         border: 'none',
         background: 'transparent',
@@ -190,6 +239,21 @@ window.__ModuleLoader__.load({
       const perTurn = Number(state.savingsPerTurn) || 0
       const payback = Number(state.paybackTurns) || 0
       const groups = Array.isArray(state.groups) ? state.groups : []
+      // ---- 名单：保留了什么 / 砍了什么（v0.2.1）----
+      const keptTools = Array.isArray(state.keptTools) ? state.keptTools : []
+      const deniedTools = Array.isArray(state.deniedTools) ? state.deniedTools : []
+      const [filter, setFilter] = React.useState('')
+      const byTag = React.useMemo(() => {
+        const out = {}
+        for (const name of deniedTools) {
+          const tag = tagOfName(name)
+          out[tag] = (out[tag] || 0) + 1
+        }
+        return out
+      }, [deniedTools])
+      const shown = filter ? deniedTools.filter((name) => tagOfName(name) === filter) : deniedTools
+      const hasLists = keptTools.length > 0 || deniedTools.length > 0
+      const tagEntries = Object.entries(byTag).sort((a, b) => b[1] - a[1])
 
       return h('div', {
         style: { ...S.panel, position: 'fixed', left: anchor.left, bottom: anchor.bottom, width: 300 },
@@ -236,6 +300,38 @@ window.__ModuleLoader__.load({
               ...groups.map((g) => h('span', { key: g, style: S.chip }, g)),
             )
           : null,
+        // ---- 名单区：先看保留（通常 <30 个），再看砍掉（按组过滤 + 滚动列表）----
+        hasLists
+          ? h('div', null,
+              h('div', { style: S.sectionTitle }, `${T.keptTools}（${keptTools.length || kept}）`),
+              h('div', { style: S.chipsBox },
+                keptTools.length === 0
+                  ? h('span', { style: S.hint }, T.empty)
+                  : keptTools.map((name) => h('span', { key: name, style: S.chip, title: name }, name)),
+              ),
+              h('div', { style: S.sectionTitle }, `${T.deniedTools}（${deniedTools.length || removed}）`),
+              h('div', { style: S.chipsBox },
+                h('span', {
+                  key: '__all',
+                  style: { ...S.chip, ...S.chipClick, ...(filter ? {} : S.chipActive) },
+                  onClick: () => setFilter(''),
+                }, `${T.all} ${deniedTools.length}`),
+                ...tagEntries.map(([tag, count]) =>
+                  h('span', {
+                    key: tag,
+                    style: { ...S.chip, ...S.chipClick, ...(filter === tag ? S.chipActive : {}) },
+                    title: `${tag} × ${count}`,
+                    onClick: () => setFilter(filter === tag ? '' : tag),
+                  }, `${tag} ${count}`),
+                ),
+              ),
+              h('div', { style: S.toolList },
+                shown.length === 0
+                  ? h('div', { style: S.toolRow }, T.empty)
+                  : shown.slice(0, 400).map((name) => h('div', { key: name, style: S.toolRow, title: name }, name)),
+              ),
+            )
+          : h('div', { style: S.sectionTitle }, T.none),
         // 状态是磁盘上的快照：写得很久以前就可能是过期数据（进程重启/任务没正常结束）
         staleAge(state) ? h('div', { style: { ...S.hint, color: '#d97706', marginBottom: 6 } },
           T.stale.replace('{age}', staleAge(state))) : null,
