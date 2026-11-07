@@ -47,8 +47,8 @@ window.__ModuleLoader__.load({
         payback: '回本',
         turns: '轮',
         token: 'token',
-        stage: '当前阶段',
-        noStage: '还没记录到阶段',
+        stage: '最近请求的阶段',
+        noStage: '还没有请求记录',
         toolsNow: '工具表大小',
         groups: '保留范围',
         goal: '目标',
@@ -94,8 +94,8 @@ window.__ModuleLoader__.load({
         payback: 'Payback',
         turns: 'turns',
         token: 'token',
-        stage: 'Stage',
-        noStage: 'no stage recorded yet',
+        stage: 'Last request stage',
+        noStage: 'no request recorded yet',
         toolsNow: 'Tool table',
         groups: 'Scope',
         goal: 'Goal',
@@ -189,15 +189,6 @@ window.__ModuleLoader__.load({
       if (ms < 12 * 3600 * 1000) return ''
       const hours = Math.round(ms / 3600000)
       return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`
-    }
-    function tagOfName(name) {
-      if (typeof name !== 'string' || !name) return 'unknown'
-      if (name.startsWith('mcp__')) {
-        const parts = name.split('__')
-        return parts.length >= 3 && parts[1] ? parts[1] : 'mcp'
-      }
-      const cut = name.indexOf('_')
-      return cut <= 0 ? 'core' : name.slice(0, cut)
     }
     function ownerLabel(title) {
       if (title === '(未归属)') return T.unknownOwner
@@ -583,15 +574,18 @@ window.__ModuleLoader__.load({
       const [anchor, setAnchor] = React.useState(null)
       const wrapRef = React.useRef(null)
 
-      // 数据：优先 SSE，失败退回轮询
+      // 数据：优先 SSE，失败/卡住就退回轮询
       React.useEffect(() => {
         let alive = true
         let es = null
         let timer = null
+        let watchdog = null
+        let lastFrame = 0
         const apply = (data) => {
           if (alive && data && typeof data === 'object') setState(data)
         }
-        const poll = () => {
+        const startPolling = () => {
+          if (timer || !alive) return
           const tick = async () => {
             try {
               const response = await fetch(ENDPOINT, { cache: 'no-store' })
@@ -603,10 +597,20 @@ window.__ModuleLoader__.load({
           tick()
           timer = setInterval(tick, POLL_MS)
         }
+        const stopStream = () => {
+          if (!es) return
+          try {
+            es.close()
+          } catch {
+            /* ignore */
+          }
+          es = null
+        }
         try {
           if (typeof EventSource === 'function') {
             es = new EventSource(STREAM)
             es.onmessage = (event) => {
+              lastFrame = Date.now()
               try {
                 apply(JSON.parse(event.data))
               } catch {
@@ -614,33 +618,32 @@ window.__ModuleLoader__.load({
               }
             }
             es.onerror = () => {
-              // 浏览器会自己重连；如果反复失败，退回轮询
+              // 规范里 CONNECTING(0) 表示"正在重连"，只有 CLOSED(2) 才是真断
               if (es && es.readyState === 2) {
-                try {
-                  es.close()
-                } catch {
-                  /* ignore */
-                }
-                es = null
-                poll()
+                stopStream()
+                startPolling()
               }
             }
+            lastFrame = Date.now()
+            // 看门狗：连上了但 6 秒没帧（服务端卡死 / 代理吞流）→ 退回轮询
+            watchdog = setInterval(() => {
+              if (!alive) return
+              if (es && Date.now() - lastFrame > 6000) {
+                stopStream()
+                startPolling()
+              }
+            }, 3000)
           } else {
-            poll()
+            startPolling()
           }
         } catch {
-          poll()
+          startPolling()
         }
         return () => {
           alive = false
-          if (es) {
-            try {
-              es.close()
-            } catch {
-              /* ignore */
-            }
-          }
+          stopStream()
           if (timer) clearInterval(timer)
+          if (watchdog) clearInterval(watchdog)
         }
       }, [])
 

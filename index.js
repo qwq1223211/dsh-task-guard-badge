@@ -110,12 +110,17 @@ function probeInfo(limit = 8) {
     hitRate: Number(row.hitRate) || 0,
   }))
   const last = rows.length > 0 ? rows[rows.length - 1] : null
+  // 【只认新鲜数据】探针是全局文件，最后一条可能来自别的会话或路由器刚重载前的旧记录。
+  // 超过 10 分钟就不当作"当前阶段"，否则徽章会显示一个早已不成立的阶段。
+  const lastAt = last ? Number(last.at) || 0 : 0
+  const fresh = lastAt > 0 && Date.now() - lastAt < 10 * 60 * 1000
   return {
-    stage: last && typeof last.stage === 'string' ? last.stage : '',
+    stage: fresh && last && typeof last.stage === 'string' ? last.stage : '',
     tools: last ? Number(last.tools) || 0 : 0,
     toolsChars: last ? Number(last.toolsChars) || 0 : 0,
     promptTokens: last ? Number(last.promptTokens) || 0 : 0,
     hitRate: last ? Number(last.hitRate) || 0 : 0,
+    stageAt: fresh ? lastAt : 0,
     recent,
   }
 }
@@ -157,7 +162,7 @@ function buildState() {
   try {
     const probe = probeInfo()
     state.stage = probe.stage || ''
-    state.probe = { tools: probe.tools, toolsChars: probe.toolsChars, promptTokens: probe.promptTokens, hitRate: probe.hitRate, recent: probe.recent }
+    state.probe = { tools: probe.tools, toolsChars: probe.toolsChars, promptTokens: probe.promptTokens, hitRate: probe.hitRate, stageAt: probe.stageAt, recent: probe.recent }
   } catch {
     // 探针读不到就算了
   }
