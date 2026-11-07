@@ -39,6 +39,7 @@ window.__ModuleLoader__.load({
       zh: {
         active: '任务收窄',
         inactive: '任务收窄 · 未开启',
+        what: '只保留任务需要的工具，其余从工具表里摘掉——省的是每轮都要付的声明开销。',
         running: '收窄中',
         goal: '目标',
         removed: '摘掉工具',
@@ -48,7 +49,7 @@ window.__ModuleLoader__.load({
         payback: '回本',
         paybackUnit: '轮',
         token: 'token',
-        groups: '保留组',
+        groups: '保留范围',
         keptTools: '保留的工具',
         deniedTools: '砍掉的工具',
         all: '全部',
@@ -61,6 +62,7 @@ window.__ModuleLoader__.load({
       en: {
         active: 'Task narrowing',
         inactive: 'Task narrowing · off',
+        what: 'Only the tools this task needs stay available; the rest leave the tool table, saving the per-turn declaration cost.',
         running: 'active',
         goal: 'Goal',
         removed: 'Tools removed',
@@ -70,7 +72,7 @@ window.__ModuleLoader__.load({
         payback: 'Payback',
         paybackUnit: 'turns',
         token: 'token',
-        groups: 'Kept groups',
+        groups: 'Scope',
         keptTools: 'Kept tools',
         deniedTools: 'Removed tools',
         all: 'All',
@@ -85,9 +87,10 @@ window.__ModuleLoader__.load({
     function pickCopy() {
       try {
         const lang = (typeof navigator !== 'undefined' && navigator.language) || ''
-        return String(lang).toLowerCase().startsWith('zh') ? COPY.zh : COPY.en
+        const isZh = String(lang).toLowerCase().startsWith('zh')
+        return { ...(isZh ? COPY.zh : COPY.en), lang: isZh ? 'zh' : 'en' }
       } catch {
-        return COPY.zh
+        return { ...COPY.zh, lang: 'zh' }
       }
     }
     const T = pickCopy()
@@ -114,6 +117,81 @@ window.__ModuleLoader__.load({
       }
       const cut = name.indexOf('_')
       return cut <= 0 ? 'core' : name.slice(0, cut)
+    }
+
+    /**
+     * 组名 → 人话。
+     *
+     * 【为什么要这张表】`core` / `plugin` 是代码里的标签，直接给用户看像半成品。
+     * 发给别人用时，徽章上不应该出现内部标识符。表里没有的组直接显示原名（不会报错）。
+     */
+    const GROUP_LABELS = {
+      core: { zh: '基础工具', en: 'Core' },
+      plugin: { zh: '插件管理', en: 'Plugins' },
+      route: { zh: '路由控制', en: 'Router' },
+      guard: { zh: '熔断器', en: 'Guard' },
+      cache: { zh: '缓存探针', en: 'Probe' },
+      task: { zh: '任务管理', en: 'Tasks' },
+      unity: { zh: 'Unity', en: 'Unity' },
+      ui: { zh: '界面', en: 'UI' },
+      uikit: { zh: 'UI 组件', en: 'UIKit' },
+      uiflow: { zh: 'UI 流程', en: 'UIFlow' },
+      art: { zh: '美术', en: 'Art' },
+      meshy: { zh: '3D 模型', en: '3D' },
+      image: { zh: '图片', en: 'Images' },
+      audio: { zh: '音频', en: 'Audio' },
+      ego: { zh: '浏览器', en: 'Browser' },
+      github: { zh: 'GitHub', en: 'GitHub' },
+      terminal: { zh: '终端', en: 'Terminal' },
+      python: { zh: 'Python', en: 'Python' },
+      notebook: { zh: '笔记本', en: 'Notebook' },
+      office: { zh: 'Office 文档', en: 'Office' },
+      docx: { zh: 'Word', en: 'Word' },
+      pptx: { zh: 'PPT', en: 'Slides' },
+      markdown: { zh: 'Markdown', en: 'Markdown' },
+      read: { zh: '文档读取', en: 'Docs' },
+      screen: { zh: '桌面操作', en: 'Desktop' },
+      click: { zh: '桌面操作', en: 'Desktop' },
+      sticker: { zh: '表情包', en: 'Stickers' },
+      meme: { zh: '表情包', en: 'Memes' },
+      comfyui: { zh: 'ComfyUI', en: 'ComfyUI' },
+      modlens: { zh: '视觉', en: 'Vision' },
+      adapt: { zh: '自适应记忆', en: 'Adaptive' },
+      session: { zh: '会话', en: 'Sessions' },
+      study: { zh: '学习', en: 'Study' },
+      list: { zh: '列表', en: 'Lists' },
+      search: { zh: '搜索', en: 'Search' },
+      transcribe: { zh: '转写', en: 'Transcribe' },
+      // Unity 全家（这些组名直接来自插件名前缀）
+      level: { zh: '关卡', en: 'Level' },
+      perf: { zh: '性能', en: 'Perf' },
+      save: { zh: '存档', en: 'Save' },
+      lighting: { zh: '光照', en: 'Lighting' },
+      player: { zh: '玩家', en: 'Player' },
+      enemy: { zh: '敌人', en: 'Enemy' },
+      l10n: { zh: '本地化', en: 'Localization' },
+      gameplay: { zh: '玩法', en: 'Gameplay' },
+      dialogue: { zh: '对话', en: 'Dialogue' },
+      quest: { zh: '剧情任务', en: 'Quest' },
+      asset: { zh: '资源', en: 'Assets' },
+      // 其他
+      cursor: { zh: '示例插件', en: 'Demo' },
+      mcp: { zh: 'MCP 服务', en: 'MCP' },
+      review: { zh: '评审', en: 'Review' },
+      working: { zh: '工作区', en: 'Workspace' },
+      create: { zh: '创建', en: 'Create' },
+      course: { zh: '课程', en: 'Course' },
+      app: { zh: '应用', en: 'App' },
+      load: { zh: '加载', en: 'Load' },
+      tool: { zh: '工具清单', en: 'Inventory' },
+      unknown: { zh: '其他', en: 'Other' },
+    }
+
+    /** 取组的人话名；表里没有就返回原名 */
+    function labelOf(tag) {
+      const entry = GROUP_LABELS[tag]
+      if (!entry) return tag
+      return T.lang === 'en' ? entry.en : entry.zh
     }
 
     const S = {
@@ -268,6 +346,8 @@ window.__ModuleLoader__.load({
           h('button', { style: S.close, title: T.close, 'aria-label': T.close, onClick: props.onClose }, '✕'),
         ),
         state.goal ? h('div', { style: S.goal }, `${T.goal}：${state.goal}`) : null,
+        // 给第一次见到它的陌生人一句话说明（分享给别人时尤其重要）
+        h('div', { style: { ...S.hint, marginBottom: 10 } }, T.what),
         h('div', { style: S.grid },
           h('div', { style: S.cell },
             h('div', { style: S.cellLabel }, T.removed),
@@ -297,7 +377,7 @@ window.__ModuleLoader__.load({
         groups.length > 0
           ? h('div', { style: S.meta },
               h('span', { style: { opacity: 0.65 } }, `${T.groups}：`),
-              ...groups.map((g) => h('span', { key: g, style: S.chip }, g)),
+              ...groups.map((g) => h('span', { key: g, style: S.chip, title: g }, labelOf(g))),
             )
           : null,
         // ---- 名单区：先看保留（通常 <30 个），再看砍掉（按组过滤 + 滚动列表）----
@@ -322,7 +402,7 @@ window.__ModuleLoader__.load({
                     style: { ...S.chip, ...S.chipClick, ...(filter === tag ? S.chipActive : {}) },
                     title: `${tag} × ${count}`,
                     onClick: () => setFilter(filter === tag ? '' : tag),
-                  }, `${tag} ${count}`),
+                  }, `${labelOf(tag)} ${count}`),
                 ),
               ),
               h('div', { style: S.toolList },
@@ -414,7 +494,7 @@ window.__ModuleLoader__.load({
 
       const removed = Number(state.denyCount) || 0
       const perTurn = Number(state.savingsPerTurn) || 0
-      const groups = Array.isArray(state.groups) && state.groups.length > 0 ? state.groups.join('+') : '—'
+      const groups = Array.isArray(state.groups) && state.groups.length > 0 ? state.groups.map(labelOf).join(' + ') : '—'
 
       return h('span', { style: S.wrap, ref: wrapRef },
         h('span', {
