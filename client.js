@@ -56,6 +56,7 @@ window.__ModuleLoader__.load({
         all: '全部',
         none: '（没有名单：这份快照是旧版本写的）',
         empty: '（没有）',
+        unknownOwner: '未识别来源',
         hint: '想恢复全部工具：说「结束任务」或调用 task_end',
         stale: '这个状态可能已过期（{age}前写入），任务可能已经不在运行',
         close: '关闭',
@@ -80,6 +81,7 @@ window.__ModuleLoader__.load({
         all: 'All',
         none: '(no lists in this snapshot — written by an older version)',
         empty: '(none)',
+        unknownOwner: 'Unknown source',
         hint: 'To restore every tool: say "end the task" or call task_end',
         stale: 'This state may be stale (written {age} ago); the task is probably not running',
         close: 'Close',
@@ -194,6 +196,12 @@ window.__ModuleLoader__.load({
       const entry = GROUP_LABELS[tag]
       if (!entry) return tag
       return T.lang === 'en' ? entry.en : entry.zh
+    }
+
+    /** host 端对"查不到归属"的工具用这个占位，客户端翻成人话 */
+    function ownerLabel(title) {
+      if (title === '(未归属)') return T.unknownOwner
+      return title
     }
 
     const S = {
@@ -323,17 +331,11 @@ window.__ModuleLoader__.load({
       const keptTools = Array.isArray(state.keptTools) ? state.keptTools : []
       const deniedTools = Array.isArray(state.deniedTools) ? state.deniedTools : []
       const [filter, setFilter] = React.useState('')
-      const byTag = React.useMemo(() => {
-        const out = {}
-        for (const name of deniedTools) {
-          const tag = tagOfName(name)
-          out[tag] = (out[tag] || 0) + 1
-        }
-        return out
-      }, [deniedTools])
-      const shown = filter ? deniedTools.filter((name) => tagOfName(name) === filter) : deniedTools
+      // 【v0.3.0】按"插件"分组，而不是按标签分组 —— 用户想知道的是"哪个插件被砍了"
+      const toolOwners = state.toolOwners && typeof state.toolOwners === 'object' ? state.toolOwners : {}
+      const deniedByOwner = Array.isArray(state.deniedByOwner) ? state.deniedByOwner : []
+      const shown = filter ? deniedTools.filter((name) => toolOwners[name] === filter) : deniedTools
       const hasLists = keptTools.length > 0 || deniedTools.length > 0
-      const tagEntries = Object.entries(byTag).sort((a, b) => b[1] - a[1])
 
       return h('div', {
         style: { ...S.panel, position: 'fixed', left: anchor.left, bottom: anchor.bottom, width: 300 },
@@ -398,19 +400,26 @@ window.__ModuleLoader__.load({
                   style: { ...S.chip, ...S.chipClick, ...(filter ? {} : S.chipActive) },
                   onClick: () => setFilter(''),
                 }, `${T.all} ${deniedTools.length}`),
-                ...tagEntries.map(([tag, count]) =>
+                ...deniedByOwner.map(({ title, count }) =>
                   h('span', {
-                    key: tag,
-                    style: { ...S.chip, ...S.chipClick, ...(filter === tag ? S.chipActive : {}) },
-                    title: `${tag} × ${count}`,
-                    onClick: () => setFilter(filter === tag ? '' : tag),
-                  }, `${labelOf(tag)} ${count}`),
+                    key: title,
+                    style: { ...S.chip, ...S.chipClick, ...(filter === title ? S.chipActive : {}) },
+                    title: `${title} × ${count}`,
+                    onClick: () => setFilter(filter === title ? '' : title),
+                  }, `${ownerLabel(title)} ${count}`),
                 ),
               ),
               h('div', { style: S.toolList },
                 shown.length === 0
                   ? h('div', { style: S.toolRow }, T.empty)
-                  : shown.slice(0, 400).map((name) => h('div', { key: name, style: S.toolRow, title: name }, name)),
+                  : shown.slice(0, 400).map((name) =>
+                      h('div', { key: name, style: S.toolRow, title: name },
+                        h('span', null, name),
+                        toolOwners[name]
+                          ? h('span', { style: { opacity: 0.45, marginLeft: 8 } }, ownerLabel(toolOwners[name]))
+                          : null,
+                      ),
+                    ),
               ),
             )
           : h('div', { style: S.sectionTitle }, T.none),
