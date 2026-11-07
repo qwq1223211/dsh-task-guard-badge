@@ -29,6 +29,8 @@ export const inject = ['webServer']
 const STATE_DIR = join(homedir(), '.dsh', 'task-guard')
 const ROUTER_DIR = join(homedir(), '.dsh', 'minimal-router')
 const STATE_FILE = join(STATE_DIR, 'current.json')
+/** task-guard 写的全量工具清单（不随任务结束消失） */
+const REGISTRY_FILE = join(STATE_DIR, 'tool-registry.json')
 const ACTIVITY_FILE = join(ROUTER_DIR, 'activity.jsonl')
 const PROBE_FILE = join(ROUTER_DIR, 'usage.jsonl')
 const PROFILE_DIR = join(homedir(), '.dsh', 'profiles', process.env.DSH_PROFILE || 'desktop')
@@ -163,6 +165,18 @@ function buildState() {
     state.history = recentEvents(20)
   } catch {
     state.history = []
+  }
+  // 空态也需要"工具表多大"：从持久清单里补，不依赖当前是否有任务
+  if (!state.active && !state.knownTools) {
+    try {
+      if (existsSync(REGISTRY_FILE)) {
+        const registry = JSON.parse(readFileSync(REGISTRY_FILE, 'utf8'))
+        const count = Number(registry && registry.count) || (Array.isArray(registry && registry.tools) ? registry.tools.length : 0)
+        if (count > 0) state.knownTools = count
+      }
+    } catch {
+      // 读不到就算了
+    }
   }
   state.serverTime = Date.now()
   return state
