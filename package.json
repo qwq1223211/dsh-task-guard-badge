@@ -1,0 +1,43 @@
+{
+  "name": "dsh-task-guard-badge",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Shows the live task-guard state as a compact pill that expands into a detail panel (tools removed/kept, narrowing ratio, per-turn savings, payback, kept groups).",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
+    }
+  },
+  "engines": {
+    "dsh": ">=0.2.1-rc.4"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "ui",
+    "task-guard"
+  ],
+  "license": "MIT"
+}

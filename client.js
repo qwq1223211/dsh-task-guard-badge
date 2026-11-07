@@ -1,0 +1,359 @@
+/**
+ * ============================================================================
+ * dsh-task-guard-badge · Client 半边（浏览器里跑）
+ * ============================================================================
+ * 挂在 conversation.composer.dock —— 「活动 / 用量」那一行下面。
+ *
+ * 【形态】
+ *   收起：一枚紧凑胶囊 —— ● 任务收窄 · core+plugin   −218 工具   省 47K/轮
+ *   点开：一张浮层卡片
+ *     ┌──────────────────────────────┐
+ *     │ 任务收窄            [收窄中] ✕ │
+ *     │ 目标：只留 core + plugin       │
+ *     │ ┌────────┬────────┐           │
+ *     │ │ 摘掉    │ 保留    │           │
+ *     │ │ 218    │ 20     │           │
+ *     │ └────────┴────────┘           │
+ *     │ 收窄强度 ███████████████░ 92%  │
+ *     │ 每轮省 46,680 token ≈ 8 轮回本 │
+ *     │ 组： core  plugin              │
+ *     └──────────────────────────────┘
+ *
+ * 【三条纪律】
+ *   1. 工厂函数本身不做副作用（只在 render 里读 state）
+ *   2. 定时器/监听器必须在 unmount 时清掉，否则切会话会累积
+ *   3. 颜色只用 currentColor + 中性 rgba，才能同时适配深/浅色主题
+ * ============================================================================
+ */
+window.__ModuleLoader__.load({
+  id: 'dsh-task-guard-badge',
+  factory(require) {
+    const React = require('react')
+    const h = React.createElement
+
+    const POLL_MS = 4000
+    const ENDPOINT = '/task-guard/state'
+
+    /** 文案（跟随界面语言；取不到就中文） */
+    const COPY = {
+      zh: {
+        active: '任务收窄',
+        inactive: '任务收窄 · 未开启',
+        running: '收窄中',
+        goal: '目标',
+        removed: '摘掉工具',
+        kept: '保留工具',
+        strength: '收窄强度',
+        saving: '每轮省',
+        payback: '回本',
+        paybackUnit: '轮',
+        token: 'token',
+        groups: '保留组',
+        hint: '想恢复全部工具：说「结束任务」或调用 task_end',
+        stale: '这个状态可能已过期（{age}前写入），任务可能已经不在运行',
+        close: '关闭',
+      },
+      en: {
+        active: 'Task narrowing',
+        inactive: 'Task narrowing · off',
+        running: 'active',
+        goal: 'Goal',
+        removed: 'Tools removed',
+        kept: 'Tools kept',
+        strength: 'Narrowing',
+        saving: 'Saved / turn',
+        payback: 'Payback',
+        paybackUnit: 'turns',
+        token: 'token',
+        groups: 'Kept groups',
+        hint: 'To restore every tool: say "end the task" or call task_end',
+        stale: 'This state may be stale (written {age} ago); the task is probably not running',
+        close: 'Close',
+      },
+    }
+
+    function pickCopy() {
+      try {
+        const lang = (typeof navigator !== 'undefined' && navigator.language) || ''
+        return String(lang).toLowerCase().startsWith('zh') ? COPY.zh : COPY.en
+      } catch {
+        return COPY.zh
+      }
+    }
+    const T = pickCopy()
+
+    /** 12345 → 12K；0.5 → 0.5 */
+    function fmt(n) {
+      const v = Number(n) || 0
+      if (v >= 1000000) return `${Math.round(v / 100000) / 10}M`
+      if (v >= 1000) return `${Math.round(v / 100) / 10}K`
+      return String(v)
+    }
+
+    const S = {
+      wrap: { position: 'relative', display: 'inline-flex', alignItems: 'center' },
+      pill: {
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 8,
+        padding: '3px 10px',
+        fontSize: 12,
+        lineHeight: '18px',
+        borderRadius: 999,
+        border: '1px solid rgba(127,127,127,0.28)',
+        background: 'rgba(127,127,127,0.10)',
+        color: 'inherit',
+        whiteSpace: 'nowrap',
+        cursor: 'pointer',
+        userSelect: 'none',
+        transition: 'background 120ms ease, border-color 120ms ease',
+      },
+      dot: { width: 7, height: 7, borderRadius: '50%', flex: '0 0 auto' },
+      label: { fontWeight: 500 },
+      mellow: { opacity: 0.6 },
+      panel: {
+        position: 'absolute',
+        bottom: 'calc(100% + 8px)',
+        left: 0,
+        zIndex: 40,
+        width: 300,
+        padding: '14px 14px 12px',
+        borderRadius: 12,
+        border: '1px solid rgba(127,127,127,0.30)',
+        background: 'canvas',
+        color: 'inherit',
+        boxShadow: '0 8px 28px rgba(0,0,0,0.22)',
+        fontSize: 12,
+        lineHeight: '18px',
+      },
+      header: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 },
+      title: { fontWeight: 600, fontSize: 13 },
+      badge: {
+        marginLeft: 'auto',
+        padding: '1px 8px',
+        borderRadius: 999,
+        fontSize: 11,
+        background: 'rgba(34,197,94,0.16)',
+        color: '#16a34a',
+      },
+      goal: { opacity: 0.75, marginBottom: 10, wordBreak: 'break-word' },
+      grid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 },
+      cell: { padding: '8px 10px', borderRadius: 8, background: 'rgba(127,127,127,0.10)' },
+      cellLabel: { fontSize: 11, opacity: 0.65, marginBottom: 2 },
+      cellValue: { fontSize: 18, fontWeight: 600, fontVariantNumeric: 'tabular-nums' },
+      barRow: { marginBottom: 10 },
+      barLabel: { display: 'flex', justifyContent: 'space-between', fontSize: 11, opacity: 0.75, marginBottom: 4 },
+      barTrack: { height: 6, borderRadius: 999, background: 'rgba(127,127,127,0.20)', overflow: 'hidden' },
+      barFill: { height: '100%', borderRadius: 999, background: 'linear-gradient(90deg,#22c55e,#16a34a)' },
+      meta: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 8 },
+      chip: {
+        padding: '1px 8px',
+        borderRadius: 999,
+        fontSize: 11,
+        background: 'rgba(127,127,127,0.16)',
+      },
+      hint: { opacity: 0.55, fontSize: 11, lineHeight: '16px' },
+      close: {
+        border: 'none',
+        background: 'transparent',
+        color: 'inherit',
+        opacity: 0.5,
+        cursor: 'pointer',
+        fontSize: 14,
+        lineHeight: '14px',
+        padding: 2,
+      },
+    }
+
+    /**
+     * 磁盘快照超过 12 小时就认为"可能过期"，返回人能读的时长（如 "7d"），否则空串。
+     * 为什么需要：进程重启后 current.json 不会自动清，徽章会一直显示"收窄中"。
+     */
+    function staleAge(state) {
+      const at = Number(state && (state.at || state.startedAt)) || 0
+      if (!at) return ''
+      const ms = Date.now() - at
+      if (ms < 12 * 3600 * 1000) return ''
+      const hours = Math.round(ms / 3600000)
+      return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`
+    }
+
+    /** 详情面板（纯展示，不持有状态） */
+    /** 详情面板（纯展示；fixed 定位避免被 composer dock 的 overflow 裁掉） */
+    function Panel(props) {
+      const state = props.state || {}
+      const anchor = props.anchor || { left: 12, bottom: 80 }
+      const removed = Number(state.denyCount) || 0
+      const kept = Number(state.keptCount) || 0
+      const total = removed + kept
+      const ratio = total > 0 ? Math.min(1, removed / total) : 0
+      const perTurn = Number(state.savingsPerTurn) || 0
+      const payback = Number(state.paybackTurns) || 0
+      const groups = Array.isArray(state.groups) ? state.groups : []
+
+      return h('div', {
+        style: { ...S.panel, position: 'fixed', left: anchor.left, bottom: anchor.bottom, width: 300 },
+        role: 'dialog',
+        'data-tg-panel': '1',
+        'aria-label': T.active,
+        onClick: (e) => e.stopPropagation(),
+      },
+        h('div', { style: S.header },
+          h('span', { style: S.title }, T.active),
+          h('span', { style: S.badge }, T.running),
+          h('button', { style: S.close, title: T.close, 'aria-label': T.close, onClick: props.onClose }, '✕'),
+        ),
+        state.goal ? h('div', { style: S.goal }, `${T.goal}：${state.goal}`) : null,
+        h('div', { style: S.grid },
+          h('div', { style: S.cell },
+            h('div', { style: S.cellLabel }, T.removed),
+            h('div', { style: S.cellValue, 'data-testid': 'tg-removed' }, String(removed)),
+          ),
+          h('div', { style: S.cell },
+            h('div', { style: S.cellLabel }, T.kept),
+            h('div', { style: S.cellValue }, String(kept)),
+          ),
+        ),
+        h('div', { style: S.barRow },
+          h('div', { style: S.barLabel },
+            h('span', null, T.strength),
+            h('span', null, `${Math.round(ratio * 100)}%`),
+          ),
+          h('div', { style: S.barTrack },
+            h('div', { style: { ...S.barFill, width: `${Math.round(ratio * 100)}%` } }),
+          ),
+        ),
+        perTurn > 0
+          ? h('div', { style: { marginBottom: 8 } },
+              `${T.saving} `,
+              h('strong', null, `${fmt(perTurn)} ${T.token}`),
+              payback > 0 ? ` · ${T.payback} ${payback} ${T.paybackUnit}` : '',
+            )
+          : null,
+        groups.length > 0
+          ? h('div', { style: S.meta },
+              h('span', { style: { opacity: 0.65 } }, `${T.groups}：`),
+              ...groups.map((g) => h('span', { key: g, style: S.chip }, g)),
+            )
+          : null,
+        // 状态是磁盘上的快照：写得很久以前就可能是过期数据（进程重启/任务没正常结束）
+        staleAge(state) ? h('div', { style: { ...S.hint, color: '#d97706', marginBottom: 6 } },
+          T.stale.replace('{age}', staleAge(state))) : null,
+        h('div', { style: S.hint }, T.hint),
+      )
+    }
+
+    function Badge() {
+      const [state, setState] = React.useState(null)
+      const [open, setOpen] = React.useState(false)
+      const [anchor, setAnchor] = React.useState(null)
+      const wrapRef = React.useRef(null)
+
+      /** 开关面板：打开前先量出胶囊的位置，面板用 fixed 贴在它上方 */
+      const toggle = () => {
+        if (open) {
+          setOpen(false)
+          return
+        }
+        try {
+          const rect = wrapRef.current.getBoundingClientRect()
+          setAnchor({
+            left: Math.max(8, Math.min(rect.left, window.innerWidth - 320)),
+            bottom: window.innerHeight - rect.top + 8,
+          })
+        } catch {
+          setAnchor({ left: 12, bottom: 80 })
+        }
+        setOpen(true)
+      }
+
+      // 轮询 + 关闭交互（点外面 / Esc）——全部在 unmount 时清理
+      React.useEffect(() => {
+        let alive = true
+        const tick = async () => {
+          try {
+            const response = await fetch(ENDPOINT, { cache: 'no-store' })
+            const data = await response.json()
+            if (alive) setState(data)
+          } catch {
+            if (alive) setState({ active: false })
+          }
+        }
+        tick()
+        const timer = setInterval(tick, POLL_MS)
+        return () => {
+          alive = false
+          clearInterval(timer)
+        }
+      }, [])
+
+      React.useEffect(() => {
+        if (!open) return undefined
+        const onDown = (event) => {
+          // 点面板自身不算"点外面"（面板是 fixed 定位，不在 wrapRef 里面）
+          const target = event && event.target
+          if (target && typeof target.closest === 'function' && target.closest('[data-tg-panel]')) return
+          if (wrapRef.current && !wrapRef.current.contains(target)) setOpen(false)
+        }
+        const onKey = (event) => {
+          if (event.key === 'Escape') setOpen(false)
+        }
+        document.addEventListener('mousedown', onDown)
+        document.addEventListener('keydown', onKey)
+        return () => {
+          document.removeEventListener('mousedown', onDown)
+          document.removeEventListener('keydown', onKey)
+        }
+      }, [open])
+
+      // 第一次还没回来 → 不占位，避免闪烁
+      if (state === null) return null
+
+      if (!state.active) {
+        return h('span', { style: { ...S.pill, cursor: 'default', opacity: 0.55, border: 'none', background: 'transparent' } },
+          h('span', { style: { ...S.dot, background: '#9ca3af' } }),
+          h('span', { style: S.mellow }, T.inactive),
+        )
+      }
+
+      const removed = Number(state.denyCount) || 0
+      const perTurn = Number(state.savingsPerTurn) || 0
+      const groups = Array.isArray(state.groups) && state.groups.length > 0 ? state.groups.join('+') : '—'
+
+      return h('span', { style: S.wrap, ref: wrapRef },
+        h('span', {
+          style: S.pill,
+          role: 'button',
+          tabIndex: 0,
+          'aria-expanded': open,
+          title: `${T.active} · ${groups}`,
+          onClick: toggle,
+          onKeyDown: (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault()
+              toggle()
+            }
+          },
+        },
+          h('span', { style: { ...S.dot, background: '#22c55e' } }),
+          h('span', { style: S.label }, `${T.active} · ${groups}`),
+          h('span', { style: S.mellow }, `−${removed}`),
+          perTurn > 0 ? h('span', { style: S.mellow }, `${T.saving} ${fmt(perTurn)}`) : null,
+        ),
+        open ? h(Panel, { state, anchor, onClose: () => setOpen(false) }) : null,
+      )
+    }
+
+    return {
+      inject: ['slots'],
+      apply(ctx) {
+        ctx.slots.inject('conversation.composer.dock', () =>
+          ctx.slots.register(
+            { name: 'conversation.composer.dock', id: 'task-guard', order: 2 },
+            Badge,
+          ),
+        )
+      },
+    }
+  },
+})

@@ -1,0 +1,9 @@
+# 顶层必须是数组
+- insert:
+    - id: task-guard-badge
+      name: dsh-task-guard-badge
+      config:
+        # 徽章轮询间隔（毫秒）。默认 4 秒够用；调太小只是白花浏览器 CPU。
+        pollMs: 4000
+        # 接口路径。改了要同步改 client.js 里的 fetch 地址。
+        routePath: /task-guard/state

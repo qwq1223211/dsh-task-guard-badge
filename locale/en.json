@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Task Guard Badge",
+    "description": "Shows the live tool-narrowing state below the composer: active task, kept groups, how many tools were removed, and the per-turn saving."
+  }
+}
