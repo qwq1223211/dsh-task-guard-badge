@@ -39,6 +39,8 @@ window.__ModuleLoader__.load({
       zh: {
         active: '任务收窄',
         inactive: '任务收窄 · 未开启',
+        allOpen: '工具表：全开',
+        inactiveTitle: '当前没有收窄任务；工具表是完整的',
         colon: '：',
         what: '只保留任务需要的工具，其余从工具表里摘掉——省的是每轮都要付的声明开销。',
         running: '收窄中',
@@ -64,6 +66,8 @@ window.__ModuleLoader__.load({
       en: {
         active: 'Task narrowing',
         inactive: 'Task narrowing · off',
+        allOpen: 'Tools: full table',
+        inactiveTitle: 'No narrowing task is running; the tool table is complete',
         colon: ': ',
         what: 'Only the tools this task needs stay available; the rest leave the tool table, saving the per-turn declaration cost.',
         running: 'active',
@@ -220,7 +224,7 @@ window.__ModuleLoader__.load({
         whiteSpace: 'nowrap',
         cursor: 'pointer',
         userSelect: 'none',
-        transition: 'background 120ms ease, border-color 120ms ease',
+        transition: 'background 120ms ease, border-color 120ms ease, box-shadow 120ms ease',
       },
       dot: { width: 7, height: 7, borderRadius: '50%', flex: '0 0 auto' },
       label: { fontWeight: 500 },
@@ -320,6 +324,12 @@ window.__ModuleLoader__.load({
     function Panel(props) {
       const state = props.state || {}
       const anchor = props.anchor || { left: 12, bottom: 80 }
+      // 进场过渡：先透明+下移 4px，下一帧再到位（120ms）
+      const [visible, setVisible] = React.useState(false)
+      React.useEffect(() => {
+        const id = requestAnimationFrame(() => setVisible(true))
+        return () => cancelAnimationFrame(id)
+      }, [])
       const removed = Number(state.denyCount) || 0
       const kept = Number(state.keptCount) || 0
       const total = removed + kept
@@ -338,7 +348,16 @@ window.__ModuleLoader__.load({
       const hasLists = keptTools.length > 0 || deniedTools.length > 0
 
       return h('div', {
-        style: { ...S.panel, position: 'fixed', left: anchor.left, bottom: anchor.bottom, width: 300 },
+        style: {
+          ...S.panel,
+          position: 'fixed',
+          left: anchor.left,
+          bottom: anchor.bottom,
+          width: 300,
+          opacity: visible ? 1 : 0,
+          transform: visible ? 'translateY(0)' : 'translateY(4px)',
+          transition: 'opacity 120ms ease, transform 120ms ease',
+        },
         role: 'dialog',
         'data-tg-panel': '1',
         'aria-label': T.active,
@@ -497,9 +516,15 @@ window.__ModuleLoader__.load({
       if (state === null) return null
 
       if (!state.active) {
-        return h('span', { style: { ...S.pill, cursor: 'default', opacity: 0.55, border: 'none', background: 'transparent' } },
+        // 【v0.4.0】空态说清"它在看什么"：工具表全开，有数字就带上数字
+        // 数字来源：task_end 快照里的 knownTools（旧快照没有就用 denyCount+keptCount 兜底）
+        const known = Number(state.knownTools) || (Number(state.denyCount) || 0) + (Number(state.keptCount) || 0)
+        return h('span', {
+          style: { ...S.pill, cursor: 'default', opacity: 0.6, border: 'none', background: 'transparent' },
+          title: T.inactiveTitle,
+        },
           h('span', { style: { ...S.dot, background: '#9ca3af' } }),
-          h('span', { style: S.mellow }, T.inactive),
+          h('span', { style: S.mellow }, `${T.allOpen}${known > 0 ? `（${known}）` : ''}`),
         )
       }
 
@@ -515,6 +540,13 @@ window.__ModuleLoader__.load({
           'aria-expanded': open,
           title: `${T.active} · ${groups}`,
           onClick: toggle,
+          // 键盘可达：focus 时给一圈绿色环（:focus-visible 无法内联，用事件代替）
+          onFocus: (e) => {
+            e.currentTarget.style.boxShadow = '0 0 0 2px rgba(34,197,94,0.45)'
+          },
+          onBlur: (e) => {
+            e.currentTarget.style.boxShadow = 'none'
+          },
           onKeyDown: (e) => {
             if (e.key === 'Enter' || e.key === ' ') {
               e.preventDefault()
