@@ -39,6 +39,7 @@ window.__ModuleLoader__.load({
       zh: {
         active: '任务收窄',
         inactive: '任务收窄 · 未开启',
+        colon: '：',
         what: '只保留任务需要的工具，其余从工具表里摘掉——省的是每轮都要付的声明开销。',
         running: '收窄中',
         goal: '目标',
@@ -62,6 +63,7 @@ window.__ModuleLoader__.load({
       en: {
         active: 'Task narrowing',
         inactive: 'Task narrowing · off',
+        colon: ': ',
         what: 'Only the tools this task needs stay available; the rest leave the tool table, saving the per-turn declaration cost.',
         running: 'active',
         goal: 'Goal',
@@ -345,7 +347,7 @@ window.__ModuleLoader__.load({
           h('span', { style: S.badge }, T.running),
           h('button', { style: S.close, title: T.close, 'aria-label': T.close, onClick: props.onClose }, '✕'),
         ),
-        state.goal ? h('div', { style: S.goal }, `${T.goal}：${state.goal}`) : null,
+        state.goal ? h('div', { style: S.goal }, `${T.goal}${T.colon}${state.goal}`) : null,
         // 给第一次见到它的陌生人一句话说明（分享给别人时尤其重要）
         h('div', { style: { ...S.hint, marginBottom: 10 } }, T.what),
         h('div', { style: S.grid },
@@ -376,7 +378,7 @@ window.__ModuleLoader__.load({
           : null,
         groups.length > 0
           ? h('div', { style: S.meta },
-              h('span', { style: { opacity: 0.65 } }, `${T.groups}：`),
+              h('span', { style: { opacity: 0.65 } }, `${T.groups}${T.colon}`),
               ...groups.map((g) => h('span', { key: g, style: S.chip, title: g }, labelOf(g))),
             )
           : null,
