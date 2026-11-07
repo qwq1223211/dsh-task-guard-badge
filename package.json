@@ -1,6 +1,6 @@
 {
   "name": "dsh-task-guard-badge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Shows the live task-guard state as a compact pill that expands into a detail panel: kept/removed tool names, narrowing ratio, per-turn savings and payback.",
