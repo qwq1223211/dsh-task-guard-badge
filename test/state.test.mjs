@@ -12,7 +12,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { readTail, parseLines, recentEvents, probeInfo, readRegistry, buildState, STAGE_FRESH_MS } from '../lib/state.js'
+import { readTail, parseLines, recentEvents, probeInfo, readRegistry, readMode, buildState, STAGE_FRESH_MS } from '../lib/state.js'
 
 const NOW = 1_800_000_000_000
 
@@ -150,6 +150,29 @@ test('buildState：有探针时 toolsCount 用真实发出数（口径统一）'
       assert.equal(state.stage, 'auto')
     },
   )
+})
+
+test('readMode：auto 才返回 auto，其它一律 manual（保守）', () => {
+  withTemp({ 'mode.json': JSON.stringify({ mode: 'auto' }) }, (dir) => {
+    assert.equal(readMode(join(dir, 'mode.json')), 'auto')
+  })
+  withTemp({ 'mode.json': JSON.stringify({ mode: 'manual' }) }, (dir) => {
+    assert.equal(readMode(join(dir, 'mode.json')), 'manual')
+  })
+  withTemp({ 'mode.json': JSON.stringify({ mode: 'weird' }) }, (dir) => {
+    assert.equal(readMode(join(dir, 'mode.json')), 'manual', '未知值不能当 auto')
+  })
+  withTemp({ 'mode.json': '{broken' }, (dir) => {
+    assert.equal(readMode(join(dir, 'mode.json')), 'manual', '坏文件不能当 auto')
+  })
+  assert.equal(readMode(join(tmpdir(), 'nope-mode.json')), 'manual', '没有文件默认 manual')
+})
+
+test('buildState：带出当前模式', () => {
+  withTemp({ 'mode.json': JSON.stringify({ mode: 'auto' }) }, (dir) => {
+    const state = buildState({ modeFile: join(dir, 'mode.json'), now: NOW })
+    assert.equal(state.mode, 'auto')
+  })
 })
 
 test('buildState：读不到任何文件也不抛错', () => {

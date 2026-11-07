@@ -26,6 +26,7 @@ const FILES = {
   registryFile: join(STATE_DIR, 'tool-registry.json'),
   requestFile: join(STATE_DIR, 'request.json'),
   resultFile: join(STATE_DIR, 'request-result.json'),
+  modeFile: join(STATE_DIR, 'mode.json'),
   activityFile: join(ROUTER_DIR, 'activity.jsonl'),
   probeFile: join(ROUTER_DIR, 'usage.jsonl'),
 }
@@ -140,7 +141,17 @@ export function apply(ctx, config = {}) {
           return reply(400, { ok: false, error: 'invalid JSON' })
         }
         const action = payload && typeof payload.action === 'string' ? payload.action : ''
-        if (action !== 'start' && action !== 'end') return reply(400, { ok: false, error: 'action must be start|end' })
+        // 模式切换：auto = 模型自己决定工具表；manual = 人手动选。两个插件都读这个文件。
+        if (action === 'mode') {
+          const mode = payload && payload.mode === 'auto' ? 'auto' : 'manual'
+          try {
+            writeFileSync(FILES.modeFile, JSON.stringify({ mode, at: Date.now() }), 'utf8')
+          } catch (error) {
+            return reply(500, { ok: false, error: `write failed: ${String((error && error.message) || error)}` })
+          }
+          return reply(200, { ok: true, mode })
+        }
+        if (action !== 'start' && action !== 'end') return reply(400, { ok: false, error: 'action must be start|end|mode' })
         const groups = Array.isArray(payload.groups) ? payload.groups.filter((g) => typeof g === 'string' && g).slice(0, 40) : []
         if (action === 'start' && groups.length === 0) return reply(400, { ok: false, error: 'start requires groups' })
         const request_id = randomUUID()

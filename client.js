@@ -90,6 +90,12 @@ window.__ModuleLoader__.load({
         clearAll: '清空',
         registered: '注册',
         actualSent: '实发',
+        modeAuto: '自动（AI 决定）',
+        modeManual: '手动',
+        modeHintAuto: 'AI 会在需要时自己收窄工具表',
+        modeHintManual: '由你选组收窄',
+        modeNoteAuto: '自动模式下：提示词会告诉 AI"你自己决定工具表"，它会在需要时调用 route_use / task_start。',
+        modeNoteManual: '手动模式下：只有你点按钮或调用工具时才会改工具表。',
       },
       en: {
         title: 'Task narrowing',
@@ -149,6 +155,12 @@ window.__ModuleLoader__.load({
         clearAll: 'Clear',
         registered: 'registered',
         actualSent: 'sent',
+        modeAuto: 'Auto (AI decides)',
+        modeManual: 'Manual',
+        modeHintAuto: 'The AI narrows the tool set itself when needed',
+        modeHintManual: 'You pick the groups',
+        modeNoteAuto: 'Auto mode: the prompt tells the model "you decide the tool set", so it will call route_use / task_start when it matters.',
+        modeNoteManual: 'Manual mode: the tool table only changes when you click a button or call a tool.',
       },
     }
 
@@ -428,6 +440,8 @@ window.__ModuleLoader__.load({
               : '',
           ),
         ),
+        // 当前模式说明：让"谁来决定"一眼可见
+        h('div', { style: { ...S.hint, marginBottom: 8 } }, state.mode === 'auto' ? T.modeNoteAuto : T.modeNoteManual),
         h('div', { style: S.sectionTitle }, T.pickGroups),
         groups.length === 0
           ? h('div', { style: S.hint }, T.empty)
@@ -655,6 +669,12 @@ window.__ModuleLoader__.load({
       },
         h('div', { style: S.header },
           h('span', { style: S.title }, T.title),
+          // 模式开关：auto = 模型自己决定；manual = 人手动选
+          h('button', {
+            style: { ...S.chip, ...S.chipClick, border: 'none', background: state.mode === 'auto' ? ACCENT_SOFT : tint(14), color: state.mode === 'auto' ? ACCENT : 'inherit' },
+            title: state.mode === 'auto' ? T.modeHintAuto : T.modeHintManual,
+            onClick: () => props.onAction && props.onAction({ action: 'mode', mode: state.mode === 'auto' ? 'manual' : 'auto' }),
+          }, state.mode === 'auto' ? T.modeAuto : T.modeManual),
           h('span', { style: inactive ? S.badgeOff : S.badge }, inactive ? T.off : T.running),
           h('button', { style: S.close, title: T.close, 'aria-label': T.close, onClick: props.onClose }, '✕'),
         ),
